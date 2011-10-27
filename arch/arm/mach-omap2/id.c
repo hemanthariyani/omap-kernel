@@ -231,25 +231,17 @@ static void __init omap4_check_features(void)
 
 	omap4_features = 0;
 
-	if (cpu_is_omap443x())
+	if (cpu_is_omap443x()) {
 		omap4_features |= OMAP4_HAS_MPU_1GHZ;
-
-
-	if (cpu_is_omap446x()) {
+	} else if (cpu_is_omap446x() || cpu_is_omap447x()) {
+		/* Standard device */
+		omap4_features |= cpu_is_omap446x() ? OMAP4_HAS_MPU_1_2GHZ
+						    : OMAP4_HAS_MPU_1_3GHZ;
 		si_type =
 			read_tap_reg(OMAP4_CTRL_MODULE_CORE_STD_FUSE_PROD_ID_1);
-		switch ((si_type & (3 << 16)) >> 16) {
-		case 2:
-			/* High performance device */
-			omap4_features |= OMAP4_HAS_MPU_1_5GHZ;
-			omap4_features |= OMAP4_HAS_MPU_1_2GHZ;
-			break;
-		case 1:
-		default:
-			/* Standard device */
-			omap4_features |= OMAP4_HAS_MPU_1_2GHZ;
-			break;
-		}
+		/* High performance device */
+		omap4_features |=  ((si_type & (3 << 16) >> 16) == 2)
+						     ? OMAP4_HAS_MPU_1_5GHZ : 0;
 	}
 }
 
