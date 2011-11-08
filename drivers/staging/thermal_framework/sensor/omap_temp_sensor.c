@@ -244,6 +244,15 @@ static void omap_configure_temp_sensor_thresholds(struct omap_temp_sensor
 	temp = ((t_hot << OMAP4_T_HOT_SHIFT) | (t_cold << OMAP4_T_COLD_SHIFT));
 	omap_temp_sensor_writel(temp_sensor, temp, BGAP_THRESHOLD_OFFSET);
 
+/*
+ * There is no need to configure shutdown thresholds if they have been
+ * already set. Especially since we are dealing with only one time writable
+ * register on 4470.
+ */
+	if (cpu_is_omap447x() &&
+		omap_temp_sensor_readl(temp_sensor, BGAP_TSHUT_OFFSET) != 0)
+		return;
+
 	tshut_hot = temp_to_adc_conversion(TSHUT_THRESHOLD_TSHUT_HOT);
 	tshut_cold = temp_to_adc_conversion(TSHUT_THRESHOLD_TSHUT_COLD);
 	if ((tshut_hot == -EINVAL) || (tshut_cold == -EINVAL)) {
@@ -554,6 +563,42 @@ out:
 #endif
 
 #ifdef TSHUT_DEBUG
+static ssize_t omap_show_thermal_hw_reset(struct device *dev,
+			struct device_attribute *devattr,
+			char *buf)
+{
+	return sprintf(buf, "%x\n",
+	omap4_ctrl_wk_pad_readl(OMAP4_CTRL_MODULE_PAD_WKUP_WKUP_CONTROL_SPARE_RW));
+}
+
+static ssize_t omap_set_thermal_hw_reset(struct device *dev,
+				 struct device_attribute *devattr,
+				 const char *buf, size_t count)
+{
+	u32 reg_val;
+	long val;
+
+	if (!cpu_is_omap447x()) {
+		pr_err("Available on OMAP4470 only\n");
+		count = -EIO;
+		goto out;
+	} else if (strict_strtol(buf, 10, &val)) {
+		count = -EINVAL;
+		goto out;
+	}
+
+	reg_val = omap4_ctrl_wk_pad_readl(OMAP4_CTRL_MODULE_PAD_WKUP_WKUP_CONTROL_SPARE_RW);
+
+	if (val == 0)
+		reg_val &= ~OMAP4_HW_TSHUT_MASK;
+	else
+		reg_val |= OMAP4_HW_TSHUT_MASK;
+
+	omap4_ctrl_wk_pad_writel(reg_val, OMAP4_CTRL_MODULE_PAD_WKUP_WKUP_CONTROL_SPARE_RW);
+out:
+	return count;
+}
+
 static ssize_t show_temp_crit(struct device *dev,
 				struct device_attribute *devattr, char *buf)
 {
@@ -644,7 +689,8 @@ static ssize_t set_temp_crit_hyst(struct device *dev,
 out:
 	return count;
 }
-
+static DEVICE_ATTR(omap_thermal_hw_reset, S_IWUSR | S_IRUGO,
+		omap_show_thermal_hw_reset, omap_set_thermal_hw_reset);
 static DEVICE_ATTR(temp1_crit, S_IWUSR | S_IRUGO, show_temp_crit,
 			  set_temp_crit);
 static DEVICE_ATTR(temp1_crit_hyst, S_IWUSR | S_IRUGO,
@@ -667,6 +713,7 @@ static struct attribute *omap_temp_sensor_attributes[] = {
 	&dev_attr_temp1_input.attr,
 	&dev_attr_temp_thresh.attr,
 #ifdef TSHUT_DEBUG
+	&dev_attr_omap_thermal_hw_reset.attr,
 	&dev_attr_temp1_crit.attr,
 	&dev_attr_temp1_crit_hyst.attr,
 #endif
