@@ -15,7 +15,7 @@
 #ifndef GCCMDBUF_H
 #define GCCMDBUF_H
 
-#include "gccore.h"
+#include <linux/gccore.h>
 #include "gcmmu.h"
 
 #if ENABLE_POLLING

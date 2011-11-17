@@ -17,6 +17,13 @@
 
 /* FIXME/TODO: these defines will go away in the final release. */
 #define AT_TI 1
+
+/* gc-core platform device data structure */
+struct gccore_plat_data {
+	void __iomem *base;
+	int irq;
+};
+
 #define ENABLE_POLLING 1
 
 /* IOCTL parameters. */

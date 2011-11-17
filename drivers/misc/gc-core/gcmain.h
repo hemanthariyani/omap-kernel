@@ -15,7 +15,7 @@
 #ifndef GCMAIN_H
 #define GCMAIN_H
 
-#include "gccore.h"
+#include <linux/gccore.h>
 
 /*
  * Register access.

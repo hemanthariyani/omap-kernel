@@ -24,7 +24,7 @@
 #include <linux/slab.h>
 #include <linux/clk.h>
 
-#include "gccore.h"
+#include <linux/gccore.h>
 #include "gcmain.h"
 #include "gccmdbuf.h"
 #include "gcmmu.h"

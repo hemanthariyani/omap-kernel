@@ -15,7 +15,7 @@
 #ifndef GCMMU_H
 #define GCMMU_H
 
-#include "gccore.h"
+#include <linux/gccore.h>
 #include "gcmain.h"
 
 #define MMU_ENABLE 1

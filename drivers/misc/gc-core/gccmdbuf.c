@@ -20,6 +20,7 @@
 #include <linux/wait.h>
 #include <linux/sched.h>
 
+#include <linux/gccore.h>
 #include "gcreg.h"
 #include "gccmdbuf.h"
 
