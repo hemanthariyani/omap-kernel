@@ -483,6 +483,13 @@ static struct regulator_init_data tablet_clk32kg = {
 	},
 };
 
+static struct regulator_init_data tablet_clk32kaudio = {
+	.constraints = {
+		.valid_ops_mask		= REGULATOR_CHANGE_STATUS,
+		.always_on		= true,
+	},
+};
+
 static void omap4_audio_conf(void)
 {
 	/* twl6040 naudint */
@@ -602,7 +609,6 @@ static struct twl4030_platform_data tablet_twldata = {
 	.vaux1		= &tablet_vaux1,
 	.vaux2		= &tablet_vaux2,
 	.vaux3		= &tablet_vaux3,
-	.clk32kg	= &tablet_clk32kg,
 
 	/* TWL6032 regulators at OMAP447X based SOMs */
 	.ldo1		= &tablet_vpp,
@@ -614,6 +620,10 @@ static struct twl4030_platform_data tablet_twldata = {
 	.ldo7		= &tablet_vusim,
 	.ldoln		= &tablet_vdac,
 	.ldousb		= &tablet_vusb,
+
+	/* TWL6030/6032 common resources */
+	.clk32kg	= &tablet_clk32kg,
+	.clk32kaudio	= &tablet_clk32kaudio,
 
 	/* children */
 	.bci		= &sdp4430_bci_data,
