@@ -15,18 +15,194 @@
 #ifndef GCCORE_H
 #define GCCORE_H
 
-#if 1
-#	define DBGPRINT printk
-#else
-#	define DBGPRINT(...)
-#endif
-
+/* FIXME/TODO: these defines will go away in the final release. */
+#define AT_TI 1
 #define ENABLE_POLLING 1
 
-#define BLT _IOW('x', 100, u32)
-#define MAP _IOWR('x', 101, u32)
-#define UMAP _IOW('x', 102, u32)
+/* IOCTL parameters. */
+#define GCIOCTL_TYPE 0x5D
+#define GCIOCTL_BASE 0x5D
 
-extern u32 *cmdbuf_start_logical;
-extern u32 cmdbuf_start_physical;
+/*******************************************************************************
+ * API errors.
+ */
+
+#define GCERR_SETGRP(error, group) \
+( \
+	(enum gcerror) \
+	((error & GCERR_GENERIC_MASK) | group) \
+)
+
+#define GCERR_GENERIC(error) \
+( \
+	(error & GCERR_GENERIC_MASK) << GCERR_GENERIC_SHIFT \
+)
+
+#define GCERR_GROUP(error) \
+( \
+	(error & GCERR_GROUP_MASK) << GCERR_GROUP_SHIFT \
+)
+
+enum gcerror {
+	/***********************************************************************
+	** No error / success.
+	*/
+	GCERR_NONE = 0,
+
+	/***********************************************************************
+	** Error code zones.
+	*/
+
+	/* Generic error code zone. These errors inform of the low level
+	   reason of the faulure, but don't carry information about which
+	   logical part of the code generated the error. */
+	GCERR_GENERIC_SIZE = 12,
+	GCERR_GENERIC_SHIFT = 0,
+	GCERR_GENERIC_MASK
+		= ((1 << GCERR_GENERIC_SIZE) - 1) << GCERR_GENERIC_SHIFT,
+
+	/* Group error code zone. These errors inform about the logical part
+	   of the code where the error occurred. */
+	GCERR_GROUP_SIZE = (32 - GCERR_GENERIC_SIZE),
+	GCERR_GROUP_SHIFT = GCERR_GENERIC_SIZE,
+	GCERR_GROUP_MASK
+		= ((1 << GCERR_GROUP_SIZE) - 1) << GCERR_GROUP_SHIFT,
+
+	/***********************************************************************
+	** Generic zone errors.
+	*/
+
+	GCERR_OODM			/* Out of dynamic memory. */
+	= GCERR_GENERIC(1),
+
+	GCERR_OOPM			/* Out of paged memory. */
+	= GCERR_GENERIC(2),
+
+	GCERR_PMMAP			/* Paged memory mapping. */
+	= GCERR_GENERIC(3),
+
+	GCERR_USER_READ			/* Reading user input. */
+	= GCERR_GENERIC(4),
+
+	GCERR_USER_WRITE		/* Writing user output. */
+	= GCERR_GENERIC(5),
+
+	/***********************************************************************
+	** Group zone errors.
+	*/
+
+	/**** Command queue errors. */
+	GCERR_CMD_ALLOC			/* Buffer allocation. */
+	= GCERR_GROUP(0x01000),
+
+	/**** MMU errors. */
+	GCERR_MMU_CTXT_BAD		/* Invalid context. */
+	= GCERR_GROUP(0x02000),
+
+	GCERR_MMU_MTLB_ALLOC		/* MTLB allocation. */
+	= GCERR_GROUP(0x02010),
+
+	GCERR_MMU_MTLB_SET		/* MTLB setting. */
+	= GCERR_GROUP(0x02020),
+
+	GCERR_MMU_STLB_ALLOC		/* STLB allocation. */
+	= GCERR_GROUP(0x02030),
+
+	GCERR_MMU_STLBIDX_ALLOC		/* STLB index allocation. */
+	= GCERR_GROUP(0x02040),
+
+	GCERR_MMU_ARENA_ALLOC		/* Vacant arena allocation. */
+	= GCERR_GROUP(0x02050),
+
+	GCERR_MMU_OOM			/* No available arenas to allocate. */
+	= GCERR_GROUP(0x02060),
+
+	GCERR_MMU_SAFE_ALLOC		/* Safe zone allocation. */
+	= GCERR_GROUP(0x02070),
+
+	GCERR_MMU_INIT			/* MMU initialization. */
+	= GCERR_GROUP(0x02080),
+
+	GCERR_MMU_ARG			/* Invalid argument. */
+	= GCERR_GROUP(0x02090),
+
+	GCERR_MMU_CLIENT		/* Client initialization. */
+	= GCERR_GROUP(0x020A0),
+
+	GCERR_MMU_BUFFER_BAD		/* Invalid buffer to map. */
+	= GCERR_GROUP(0x020B0),
+
+	GCERR_MMU_PAGE_BAD		/* Bad page within the buffer. */
+	= GCERR_GROUP(0x020C0),
+};
+
+/*******************************************************************************
+ * Commit API entry.
+ */
+
+struct gccommit;
+struct gcbuffer;
+struct gcfixup;
+
+/* IOCTL entry point. */
+#define GCIOCTL_COMMIT _IOWR(GCIOCTL_TYPE, GCIOCTL_BASE + 0, struct gccommit)
+
+/* Entry point. */
+int gc_commit(struct gccommit *gccommit);
+
+/* Commit header; contains pointers to the head and the tail of a linked list
+   of command buffers to execute. */
+struct gccommit {
+	enum gcerror gcerror;		/* Return status code. */
+	struct gcbuffer *buffer;	/* Command buffer list. */
+};
+
+/* Command buffer header. */
+#define GC_BUFFER_SIZE 4096
+struct gcbuffer {
+	struct gcfixup *fixuphead;	/* Address fixup list. */
+	struct gcfixup *fixuptail;
+
+	unsigned int pixelcount;	/* Number of pixels to be rendered. */
+
+	unsigned int *head;		/* Pointers to the head and tail */
+	unsigned int *tail;		/* of the command buffer. */
+
+	unsigned int available;		/* Number of bytes available in the
+					   buffer. */
+	struct gcbuffer *next;		/* Pointer to the next commmand
+					   buffer. */
+};
+
+/* Address fixup array. */
+#define GC_FIXUP_MAX 1024
+struct gcfixup {
+	struct gcfixup *next;
+	unsigned int count;
+	unsigned int fixup[GC_FIXUP_MAX];
+};
+
+/*******************************************************************************
+ * Map/unmap API entries.
+ */
+
+struct gcmap;
+
+/* IOCTL entry points. */
+#define GCIOCTL_MAP   _IOWR(GCIOCTL_TYPE, GCIOCTL_BASE + 1, struct gcmap)
+#define GCIOCTL_UNMAP _IOWR(GCIOCTL_TYPE, GCIOCTL_BASE + 2, struct gcmap)
+
+/* Entry point. */
+int gc_map(struct gcmap *gcmap);
+int gc_unmap(struct gcmap *gcmap);
+
+struct gcmap {
+	enum gcerror gcerror;		/* Return status code. */
+
+	void *logical;			/* Pointer to the buffer. */
+	size_t size;			/* Size of the buffer. */
+
+	unsigned int handle;		/* Mapped handle of the buffer. */
+};
+
 #endif

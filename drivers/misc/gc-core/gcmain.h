@@ -1,5 +1,5 @@
 /*
- * gccmdbuf.h
+ * gcmain.h
  *
  * Copyright (C) 2010-2011 Vivante Corporation.
  *
@@ -12,26 +12,31 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#ifndef GCCMDBUF_H
-#define GCCMDBUF_H
+#ifndef GCMAIN_H
+#define GCMAIN_H
 
 #include "gccore.h"
-#include "gcmmu.h"
 
-#if ENABLE_POLLING
-extern volatile u32 int_data;
-#endif
+/*
+ * Register access.
+ */
 
-extern wait_queue_head_t gc_event;
-extern int done;
+unsigned int gc_read_reg(unsigned int address);
+void gc_write_reg(unsigned int address, unsigned int data);
 
-enum gcerror cmdbuf_init(void);
-enum gcerror cmdbuf_map(struct mmu2dcontext *ctxt);
-enum gcerror cmdbuf_alloc(u32 size, u32 **logical, u32 *physical);
-int cmdbuf_flush(u32 *logical);
-void cmdbuf_dump(void);
+/*
+ * Paged memory allocator.
+ */
 
-void gpu_id(void);
-void gpu_status(char *function, int line, u32 acknowledge);
+struct gcpage {
+	unsigned int order;
+	unsigned int size;
+	struct page *pages;
+	unsigned int physical;
+	unsigned int *logical;
+};
+
+enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size);
+void gc_free_pages(struct gcpage *p);
 
 #endif
