@@ -801,15 +801,6 @@ void OMAPLFBSwapHandler(OMAPLFB_BUFFER *psBuffer)
 #include <video/dsscomp.h>
 #include <plat/dsscomp.h>
 
-void sgx_idle_log_flip(void);
-
-static void dsscomp_proxy_cmdcomplete(void * cookie, int i)
-{
-	sgx_idle_log_flip();
-	/* XXX: assumes that there is only one display */
-	gapsDevInfo[0]->sPVRJTable.pfnPVRSRVCmdComplete(cookie, i);
-}
-
 static IMG_BOOL ProcessFlipV1(IMG_HANDLE hCmdCookie,
 							  OMAPLFB_DEVINFO *psDevInfo,
 							  OMAPLFB_SWAPCHAIN *psSwapChain,
@@ -856,7 +847,7 @@ static IMG_BOOL ProcessFlipV1(IMG_HANDLE hCmdCookie,
 			struct tiler_pa_info *pas[1] = { NULL };
 			comp.ovls[0].ba = (u32) psBuffer->sSysAddr.uiAddr;
 			dsscomp_gralloc_queue(&comp, pas, true,
-					      dsscomp_proxy_cmdcomplete,
+					      (void *) psDevInfo->sPVRJTable.pfnPVRSRVCmdComplete,
 					      (void *) psBuffer->hCmdComplete);
 		} else {
 			OMAPLFBQueueBufferForSwap(psSwapChain, psBuffer);
@@ -966,7 +957,7 @@ static IMG_BOOL ProcessFlipV2(IMG_HANDLE hCmdCookie,
 	}
 
 	dsscomp_gralloc_queue(psDssData, apsTilerPAs, false,
-						  dsscomp_proxy_cmdcomplete,
+						  (void *)psDevInfo->sPVRJTable.pfnPVRSRVCmdComplete,
 						  (void *)hCmdCookie);
 
 	return IMG_TRUE;
