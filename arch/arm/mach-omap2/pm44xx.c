@@ -1224,7 +1224,7 @@ static int __init omap4_pm_init(void)
 			" MPUSS <-> L3_MAIN_1.\n");
 		pr_info("OMAP4 PM: Static dependency added between"
 			" DUCATI <-> L4_PER/CFG and DUCATI <-> L3.\n");
-	} else if (cpu_is_omap446x()) {
+	} else if (cpu_is_omap446x() || cpu_is_omap447x()) {
 		/*
 		 * Static dependency between mpuss and emif can only be
 		 * disabled if OSWR is disabled to avoid a HW bug that occurs
