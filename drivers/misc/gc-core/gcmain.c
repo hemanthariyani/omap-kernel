@@ -22,6 +22,7 @@
 #include <linux/pagemap.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/clk.h>
 
 #include "gccore.h"
 #include "gcmain.h"
@@ -124,17 +125,15 @@ enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
 	}
 
 	gcpage->physical = page_to_phys(gcpage->pages);
-
-	gcpage->logical
-		= (unsigned int *) ioremap_nocache(gcpage->physical, size);
+	gcpage->logical = (unsigned int *) page_address(gcpage->pages);
 
 	if (gcpage->logical == NULL) {
 		gcerror = GCERR_PMMAP;
 		goto fail;
 	}
 
-	GC_PRINT("%s(%d): physical=0x%08X, size=%d\n", __func__, __LINE__,
-				(unsigned int) gcpage->physical, gcpage->size);
+	GC_PRINT(KERN_ERR "%s(%d): physical=0x%08X, size=%d\n", __func__,
+		__LINE__, (unsigned int) gcpage->physical, gcpage->size);
 	return GCERR_NONE;
 
 fail:
@@ -144,10 +143,8 @@ fail:
 
 void gc_free_pages(struct gcpage *p)
 {
-	if (p->logical != NULL) {
-		iounmap(p->logical);
+	if (p->logical != NULL)
 		p->logical = NULL;
-	}
 
 	if (p->pages != NULL) {
 		__free_pages(p->pages, p->order);
@@ -528,6 +525,24 @@ static int __init gc_init(void)
 {
 	int ret = 0;
 	u32 clock = 0;
+	struct clk *bb2d_clk;
+
+	GC_PRINT(KERN_ERR "%s(%d): ****** %s %s ******\n",
+			 __func__, __LINE__, __DATE__, __TIME__);
+
+	bb2d_clk = clk_get(NULL, "bb2d_fck");
+	if (!bb2d_clk) {
+		GC_PRINT(KERN_ERR "%s(%d): cannot find bb2d_fck.\n",
+			 __func__, __LINE__);
+		return -EINVAL;
+	}
+
+	if (clk_enable(bb2d_clk)) {
+		clk_put(bb2d_clk);
+		GC_PRINT(KERN_ERR "%s(%d): failed to enable bb2d_fck.\n",
+			 __func__, __LINE__);
+		return -EINVAL;
+	}
 
 	ret = alloc_chrdev_region(&dev, GC_MINOR, GC_COUNT, GC_DEVICE);
 	if (ret != 0)

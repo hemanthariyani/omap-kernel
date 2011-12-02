@@ -1017,7 +1017,7 @@ enum gcerror mmu2d_fixup(
 	)
 {
 	enum gcerror gcerror = GCERR_NONE;
-	static struct gcfixup _fixup;
+	static struct gcfixup _fixup;	/* FIXME/TODO */
 	int fixedsize, tablesize;
 	struct mmu2darena *arena;
 	unsigned int *table;
