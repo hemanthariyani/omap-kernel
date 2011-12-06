@@ -20,9 +20,11 @@
  */
 #include <linux/module.h>
 #include <linux/opp.h>
+#include <linux/clk.h>
 
 #include <plat/cpu.h>
 #include <plat/common.h>
+#include <plat/clock.h>
 
 #include "control.h"
 #include "omap_opp_data.h"
@@ -523,7 +525,16 @@ int __init omap4_opp_init(void)
 		if (!trimmed)
 			omap_writel(0x29, 0x4a002330);
 	} else if (cpu_is_omap447x()) {
-		if (omap4_has_core_opp_high_set())
+		struct clk *dpll_core_ck;
+		unsigned long rate = 0;
+
+		dpll_core_ck = clk_get(NULL, "dpll_core_ck");
+		if (dpll_core_ck) {
+			rate = dpll_core_ck->recalc(dpll_core_ck);
+			clk_put(dpll_core_ck);
+		}
+
+		if (rate > 800000000)
 			r = omap_init_opp_table(omap447x_opp_high_def_list,
 					ARRAY_SIZE(omap447x_opp_high_def_list));
 		else
