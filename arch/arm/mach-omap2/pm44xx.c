@@ -106,8 +106,10 @@ void omap4_trigger_ioctrl(void)
 	omap4_prminst_rmw_inst_reg_bits(OMAP4430_WUCLK_CTRL_MASK, OMAP4430_WUCLK_CTRL_MASK,
 		OMAP4430_PRM_PARTITION, OMAP4430_PRM_DEVICE_INST, OMAP4_PRM_IO_PMCTRL_OFFSET);
 	omap_test_timeout(
-		((omap4_prminst_read_inst_reg(OMAP4430_PRM_PARTITION, OMAP4430_PRM_DEVICE_INST, OMAP4_PRM_IO_PMCTRL_OFFSET)
-		>> OMAP4430_WUCLK_STATUS_SHIFT) == 1),
+		(((omap4_prminst_read_inst_reg(OMAP4430_PRM_PARTITION,
+					       OMAP4430_PRM_DEVICE_INST,
+					       OMAP4_PRM_IO_PMCTRL_OFFSET) &
+		  OMAP4430_WUCLK_STATUS_MASK) >> OMAP4430_WUCLK_STATUS_SHIFT) == 1),
 		MAX_IOPAD_LATCH_TIME, i);
 	/* Trigger WUCLKIN disable */
 	omap4_prminst_rmw_inst_reg_bits(OMAP4430_WUCLK_CTRL_MASK, 0x0,
@@ -470,7 +472,7 @@ static inline u8 get_achievable_state(u8 available_states, u8 req_min_state,
 }
 
 /**
- * omap4_configure_pwdm_suspend() - Program powerdomain on suspend
+ * omap4_configure_pwrst() - Program powerdomain to their supported state
  * @is_off_mode: is this an OFF mode transition?
  *
  * Program all powerdomain to required power domain state: This logic
@@ -479,7 +481,7 @@ static inline u8 get_achievable_state(u8 available_states, u8 req_min_state,
  * each domain to the state requested. if the requested state is not
  * available, it will check for the higher state.
  */
-static void omap4_configure_pwdm_suspend(bool is_off_mode)
+static void omap4_configure_pwrst(bool is_off_mode)
 {
 	struct power_state *pwrst;
 	u32 state;
@@ -620,7 +622,7 @@ static int omap4_pm_suspend(void)
 		omap2_pm_wakeup_on_timer(wakeup_timer_seconds,
 					 wakeup_timer_milliseconds);
 
-	omap4_configure_pwdm_suspend(off_mode_enabled);
+	omap4_configure_pwrst(off_mode_enabled);
 
 	/* Enable Device OFF */
 	if (off_mode_enabled)
@@ -755,7 +757,8 @@ static int __init pwrdms_setup(struct powerdomain *pwrdm, void *unused)
 			(!strcmp(pwrdm->name, "cpu1_pwrdm")))
 		pwrst->next_state = PWRDM_POWER_ON;
 	else
-		pwrst->next_state = PWRDM_POWER_RET;
+		omap4_configure_pwrst(off_mode_enabled);
+
 	list_add(&pwrst->node, &pwrst_list);
 
 	return omap_set_pwrdm_state(pwrst->pwrdm, pwrst->next_state);
@@ -862,7 +865,7 @@ static void __init prcm_setup_regs(void)
 		OMAP4430_PRM_PARTITION, OMAP4430_PRM_DEVICE_INST, OMAP4_PRM_LDO_SRAM_IVA_SETUP_OFFSET);
 
 	/* Allow SRAM LDO to enter RET during  low power state*/
-	if (cpu_is_omap446x()) {
+	if (cpu_is_omap446x() || cpu_is_omap447x()) {
 		omap4_prminst_rmw_inst_reg_bits(OMAP4430_RETMODE_ENABLE_MASK,
 				0x1 << OMAP4430_RETMODE_ENABLE_SHIFT, OMAP4430_PRM_PARTITION,
 				OMAP4430_PRM_DEVICE_INST, OMAP4_PRM_LDO_SRAM_CORE_CTRL_OFFSET);
