@@ -15,16 +15,14 @@
 #ifndef GCCORE_H
 #define GCCORE_H
 
-/* FIXME/TODO: these defines will go away in the final release. */
-#define AT_TI 1
+/* FIXME/TODO: this define will go away in the final release. */
+#define ENABLE_POLLING 1
 
 /* gc-core platform device data structure */
 struct gccore_plat_data {
 	void __iomem *base;
 	int irq;
 };
-
-#define ENABLE_POLLING 1
 
 /* IOCTL parameters. */
 #define GCIOCTL_TYPE 0x5D
@@ -141,6 +139,12 @@ enum gcerror {
 
 	GCERR_MMU_PAGE_BAD		/* Bad page within the buffer. */
 	= GCERR_GROUP(0x020C0),
+
+	GCERR_MMU_DESC_ALLOC		/* Bad page within the buffer. */
+	= GCERR_GROUP(0x020D0),
+
+	GCERR_MMU_PHYS_ALLOC		/* Bad page within the buffer. */
+	= GCERR_GROUP(0x020E0),
 };
 
 /*******************************************************************************
