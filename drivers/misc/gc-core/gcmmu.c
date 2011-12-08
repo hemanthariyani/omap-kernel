@@ -19,6 +19,7 @@
 #include <linux/io.h>
 #include <linux/pagemap.h>
 #include <linux/sched.h>
+#include <linux/dma-mapping.h>
 
 #include "gcreg.h"
 #include "gcmmu.h"
@@ -180,7 +181,7 @@ static enum gcerror mmu2d_get_arena(struct mmu2dprivate *mmu,
 	if (mmu->arena_recs == NULL) {
 		block = kmalloc(ARENA_PREALLOC_SIZE, GFP_KERNEL);
 		if (block == NULL)
-			return GCERR_OODM;
+			return GCERR_SETGRP(GCERR_OODM, GCERR_MMU_ARENA_ALLOC);
 
 		block->next = mmu->arena_blocks;
 		mmu->arena_blocks = block;
@@ -236,6 +237,7 @@ static int mmu2d_siblings(struct mmu2darena *arena1, struct mmu2darena *arena2)
  * Slave table allocation management.
  */
 
+#if MMU_ENABLE
 static enum gcerror mmu2d_allocate_slave(struct mmu2dcontext *ctxt,
 						struct mmu2dstlb **stlb)
 {
@@ -285,15 +287,20 @@ static void mmu2d_free_slave(struct mmu2dcontext *ctxt, struct mmu2dstlb *slave)
 	slave->next = ctxt->slave_recs;
 	ctxt->slave_recs = slave;
 }
+#endif
 
 enum gcerror mmu2d_create_context(struct mmu2dcontext *ctxt)
 {
 	enum gcerror gcerror;
+
+#if MMU_ENABLE
 	int i;
 	u32 *buffer;
 	u32 physical;
 	u32 cmdflushsize;
 	u32 size;
+#endif
+
 	struct mmu2dprivate *mmu = get_mmu();
 
 	if (ctxt == NULL)
@@ -332,10 +339,8 @@ enum gcerror mmu2d_create_context(struct mmu2dcontext *ctxt)
 
 	/* Allocate the first vacant arena. */
 	gcerror = mmu2d_get_arena(mmu, &ctxt->vacant);
-	if (gcerror != GCERR_NONE) {
-		gcerror = GCERR_SETGRP(gcerror, GCERR_MMU_ARENA_ALLOC);
+	if (gcerror != GCERR_NONE)
 		goto fail;
-	}
 
 	/* Everything is vacant. */
 	ctxt->vacant->mtlb  = 0;
@@ -404,14 +409,14 @@ enum gcerror mmu2d_create_context(struct mmu2dcontext *ctxt)
 
 	return GCERR_NONE;
 
-#if MMU_ENABLE
 fail:
+#if MMU_ENABLE
 	gc_free_pages(&ctxt->master);
 	if (ctxt->slave != NULL)
 		kfree(ctxt->slave);
+#endif
 
 	return gcerror;
-#endif
 }
 
 enum gcerror mmu2d_destroy_context(struct mmu2dcontext *ctxt)
@@ -538,7 +543,7 @@ static enum gcerror get_physical_pages(struct mmu2dphysmem *mem,
 	/* Allocate page descriptor array. */
 	pages = kmalloc(mem->count * sizeof(struct page *), GFP_KERNEL);
 	if (pages == NULL) {
-		gcerror = GCERR_OODM;
+		gcerror = GCERR_SETGRP(GCERR_OODM, GCERR_MMU_DESC_ALLOC);
 		goto exit;
 	}
 
@@ -603,10 +608,16 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 {
 	enum gcerror gcerror = GCERR_NONE;
 	struct mmu2darena *prev, *vacant, *split;
+#if MMU_ENABLE
 	struct mmu2dstlb *stlb = NULL;
 	u32 *mtlb_logical, *stlb_logical;
+#endif
 	u32 mtlb_idx, stlb_idx, next_idx;
+#if MMU_ENABLE
 	u32 i, j, count, available;
+#else
+	u32 i, count, available;
+#endif
 	pte_t *parray_alloc = NULL;
 	pte_t *parray;
 
@@ -618,14 +629,6 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 		return GCERR_MMU_ARG;
 
 	down_read(&current->mm->mmap_sem);
-
-#if GC_DUMP
-	GC_PRINT(KERN_ERR "%s(%d): mapping (%d) pages:\n",
-		__func__, __LINE__, mem->count);
-
-	for (i = 0; i < mem->count; i += 1)
-		GC_PRINT(KERN_ERR "  %d: 0x%08X\n", i, (u32) mem->pages[i]);
-#endif
 
 	/*
 	 * Find available sufficient arena.
@@ -659,7 +662,8 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 		parray_alloc = kmalloc(mem->count * sizeof(pte_t *),
 					GFP_KERNEL);
 		if (parray_alloc == NULL) {
-			gcerror = GCERR_OODM;
+			gcerror = GCERR_SETGRP(GCERR_OODM,
+						GCERR_MMU_PHYS_ALLOC);
 			goto fail;
 		}
 
@@ -671,6 +675,11 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 		parray = parray_alloc;
 	} else
 		parray = mem->pages;
+
+#if GC_DUMP
+	GC_PRINT(KERN_ERR "%s(%d): mapping (%d) pages:\n",
+		__func__, __LINE__, mem->count);
+#endif
 
 	/*
 	 * Allocate slave tables as necessary.
@@ -724,11 +733,44 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 
 			parray += 1;
 		}
+
+#if USE_DMA_COHERENT
+#if 1
+		dma_sync_single_for_device(NULL, ctxt->slave[i]->pages.physical,
+						ctxt->slave[i]->pages.size,
+						DMA_TO_DEVICE);
+#elif 0
+		dmac_flush_range(ctxt->slave[i]->pages.logical,
+					(unsigned char *)
+					ctxt->slave[i]->pages.logical +
+					ctxt->slave[i]->pages.size);
+#else
+	/*flush_kern_dcache_area(_gcmap.logical, _gcmap.size);*/
+	flush_cache_all();
+#endif
+#endif
 #endif
 
 		count -= available;
 		stlb_idx = next_idx;
 	}
+
+#if MMU_ENABLE
+#if USE_DMA_COHERENT
+#if 1
+	dma_sync_single_for_device(NULL, ctxt->master.physical,
+					ctxt->master.size, DMA_TO_DEVICE);
+#elif 0
+	dmac_flush_range(ctxt->master.logical,
+				(unsigned char *)
+				ctxt->master.logical +
+				ctxt->master.size);
+#else
+	/*flush_kern_dcache_area(_gcmap.logical, _gcmap.size);*/
+	flush_cache_all();
+#endif
+#endif
+#endif
 
 	/*
 	 * Claim arena.
@@ -738,10 +780,8 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 
 	if (vacant->count != mem->count) {
 		gcerror = mmu2d_get_arena(ctxt->mmu, &split);
-		if (gcerror != GCERR_NONE) {
-			gcerror = GCERR_SETGRP(gcerror, GCERR_MMU_ARENA_ALLOC);
+		if (gcerror != GCERR_NONE)
 			goto fail;
-		}
 
 		split->mtlb  = mtlb_idx;
 		split->stlb  = stlb_idx;
@@ -767,8 +807,8 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 		| ((vacant->stlb << MMU_STLB_SHIFT) & MMU_STLB_MASK)
 		| (mem->offset & MMU_OFFSET_MASK);
 #else
-	vacant->address = (parray_alloc == NULL)
-		? *mem->pages : *parray_alloc;
+	vacant->address = mem->offset + ((parray_alloc == NULL)
+		? *mem->pages : *parray_alloc);
 #endif
 
 fail:
@@ -787,11 +827,17 @@ enum gcerror mmu2d_unmap(struct mmu2dcontext *ctxt, struct mmu2darena *mapped)
 {
 	enum gcerror gcerror = GCERR_NONE;
 	struct mmu2darena *prev, *allocated, *vacant;
+#if MMU_ENABLE
 	struct mmu2dstlb *stlb;
+#endif
 	u32 mtlb_idx, stlb_idx;
 	u32 next_mtlb_idx, next_stlb_idx;
+#if MMU_ENABLE
 	u32 i, j, count, available;
 	u32 *stlb_logical;
+#else
+	u32 i, count, available;
+#endif
 
 	if ((ctxt == NULL) || (ctxt->mmu == NULL))
 		return GCERR_MMU_CTXT_BAD;
@@ -964,12 +1010,12 @@ int mmu2d_flush(u32 *logical, u32 address, u32 size)
 
 		logical[5]
 		= SETFIELDVAL(0, AQ_SEMAPHORE, SOURCE, FRONT_END)
-		  | SETFIELDVAL(0, AQ_SEMAPHORE, DESTINATION, PIXEL_ENGINE);
+		| SETFIELDVAL(0, AQ_SEMAPHORE, DESTINATION, PIXEL_ENGINE);
 
 		/* LINK to the next slot to flush FE FIFO. */
 		logical[6]
 		= SETFIELDVAL(0, AQ_COMMAND_LINK_COMMAND, OPCODE, LINK)
-		  | SETFIELD(0, AQ_COMMAND_LINK_COMMAND, PREFETCH, 4);
+		| SETFIELD(0, AQ_COMMAND_LINK_COMMAND, PREFETCH, 4);
 
 		logical[7] = address + 8 * sizeof(u32);
 
@@ -994,12 +1040,12 @@ int mmu2d_flush(u32 *logical, u32 address, u32 size)
 
 		logical[13]
 		= SETFIELDVAL(0, AQ_SEMAPHORE, SOURCE, FRONT_END)
-		  | SETFIELDVAL(0, AQ_SEMAPHORE, DESTINATION, PIXEL_ENGINE);
+		| SETFIELDVAL(0, AQ_SEMAPHORE, DESTINATION, PIXEL_ENGINE);
 
 		/* LINK to the next slot to flush FE FIFO. */
 		logical[14]
 		= SETFIELDVAL(0, AQ_COMMAND_LINK_COMMAND, OPCODE, LINK)
-		  | SETFIELD(0, AQ_COMMAND_LINK_COMMAND, PREFETCH, count);
+		| SETFIELD(0, AQ_COMMAND_LINK_COMMAND, PREFETCH, count);
 
 		logical[15]
 		= address + flushSize;
