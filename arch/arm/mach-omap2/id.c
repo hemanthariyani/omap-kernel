@@ -240,7 +240,7 @@ static void __init omap4_check_features(void)
 		si_type =
 			read_tap_reg(OMAP4_CTRL_MODULE_CORE_STD_FUSE_PROD_ID_1);
 		/* High performance device */
-		omap4_features |=  ((si_type & (3 << 16) >> 16) == 2)
+		omap4_features |=  ((si_type >> 16 & 3) == 2)
 						     ? OMAP4_HAS_MPU_1_5GHZ : 0;
 	}
 }
