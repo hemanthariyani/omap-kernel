@@ -18,7 +18,7 @@
 #include <linux/gccore.h>
 #include "gcmain.h"
 
-#define MMU_ENABLE 1
+#define MMU_ENABLE 0
 
 /*
  * Master table can be configured in 1KB mode with 256 maximum entries

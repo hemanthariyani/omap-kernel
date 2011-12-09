@@ -28,6 +28,15 @@ void gc_write_reg(unsigned int address, unsigned int data);
  * Paged memory allocator.
  */
 
+#define USE_DMA_COHERENT 1
+
+#if USE_DMA_COHERENT
+struct gcpage {
+	unsigned int size;
+	unsigned int physical;
+	unsigned int *logical;
+};
+#else
 struct gcpage {
 	unsigned int order;
 	unsigned int size;
@@ -35,6 +44,7 @@ struct gcpage {
 	unsigned int physical;
 	unsigned int *logical;
 };
+#endif
 
 enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size);
 void gc_free_pages(struct gcpage *p);
