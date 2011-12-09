@@ -23,15 +23,15 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
-#include <linux/dma-mapping.h>
 
+#include <linux/gccore.h>
 #include "gcmain.h"
 #include "gccmdbuf.h"
 #include "gcmmu.h"
 #include "gcreg.h"
 
 #ifndef GC_DUMP
-#	define GC_DUMP 0
+#	define GC_DUMP 1
 #endif
 
 #if GC_DUMP
@@ -42,9 +42,15 @@
 
 #define GC_DEVICE "gc-core"
 
-#define DEVICE_INT	(32 + 125)
-#define DEVICE_REG_BASE	0x59000000
-#define DEVICE_REG_SIZE	(256 * 1024)
+#if AT_TI
+#	define DEVICE_INT	(32 + 125)
+#	define DEVICE_REG_BASE	0x59000000
+#	define DEVICE_REG_SIZE	(256 * 1024)
+#else
+#	define DEVICE_INT	9
+#	define DEVICE_REG_BASE	0xB0040000
+#	define DEVICE_REG_SIZE	(256 * 1024)
+#endif
 
 static dev_t dev;
 static struct cdev cd;
@@ -98,51 +104,10 @@ void gc_write_reg(unsigned int address, unsigned int data)
  * Page allocation routines.
  */
 
-#if USE_DMA_COHERENT
 enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
 {
 	enum gcerror gcerror;
-
-	gcpage->size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-
-	gcpage->physical = ~0UL;
-	gcpage->logical = dma_alloc_coherent(NULL,
-						gcpage->size,
-						&gcpage->physical,
-						GFP_KERNEL);
-
-	if (gcpage->logical == NULL) {
-		gcerror = GCERR_OOPM;
-		goto fail;
-	}
-
-	GC_PRINT(KERN_ERR "%s(%d): logical=0x%08X physical=0x%08X, size=%d\n",
-		__func__, __LINE__, (unsigned int) gcpage->logical,
-		(unsigned int) gcpage->physical, gcpage->size);
-
-	return GCERR_NONE;
-
-fail:
-	return gcerror;
-}
-
-void gc_free_pages(struct gcpage *p)
-{
-	if (p->logical != NULL) {
-		dma_free_coherent(NULL, p->size, p->logical, p->physical);
-
-		p->logical = NULL;
-		p->physical = ~0UL;
-	}
-
-	p->size = 0;
-}
-#else
-enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
-{
-	enum gcerror gcerror;
-	void *logical;
-	int order, count;
+	int order;
 
 	gcpage->pages = NULL;
 	gcpage->logical = NULL;
@@ -151,16 +116,7 @@ enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
 	order = get_order(size);
 
 	gcpage->order = order;
-	gcpage->size = (1 << order) * PAGE_SIZE;
-
-	GC_PRINT(KERN_ERR "%s(%d): requested size=%d\n",
-		__func__, __LINE__, size);
-
-	GC_PRINT(KERN_ERR "%s(%d): rounded up size=%d\n",
-		__func__, __LINE__, gcpage->size);
-
-	GC_PRINT(KERN_ERR "%s(%d): order=%d\n",
-		__func__, __LINE__, order);
+	gcpage->size = (1 << order) * MMU_PAGE_SIZE;
 
 	gcpage->pages = alloc_pages(GFP_KERNEL, order);
 	if (gcpage->pages == NULL) {
@@ -176,20 +132,8 @@ enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
 		goto fail;
 	}
 
-	/* Reserve pages. */
-	logical = gcpage->logical;
-	count = gcpage->size / PAGE_SIZE;
-
-	while (count) {
-		SetPageReserved(virt_to_page(logical));
-
-		logical = (unsigned char *) logical + PAGE_SIZE;
-		count  -= 1;
-	}
-
-	GC_PRINT(KERN_ERR "%s(%d): physical=0x%08X, size=%d\n",
-				__func__, __LINE__,
-				(unsigned int) gcpage->physical, gcpage->size);
+	GC_PRINT(KERN_ERR "%s(%d): physical=0x%08X, size=%d\n", __func__,
+		__LINE__, (unsigned int) gcpage->physical, gcpage->size);
 	return GCERR_NONE;
 
 fail:
@@ -211,7 +155,6 @@ void gc_free_pages(struct gcpage *p)
 	p->order = 0;
 	p->size = 0;
 }
-#endif
 
 /*******************************************************************************
  * Interrupt handling.
@@ -249,7 +192,7 @@ static irqreturn_t gc_irq(int irq, void *p)
 #endif
 
 #if ENABLE_POLLING
-		int_data = data & 0x3FFFFFFF;
+		int_data = data;
 #else
 		/* TODO: we need to wait for an interrupt after enabling
 			 the mmu, but we don't want to send a signal to
@@ -455,11 +398,6 @@ int gc_map(struct gcmap *gcmap)
 	if (_gcmap.gcerror != GCERR_NONE)
 		goto exit;
 
-	GC_PRINT(KERN_ERR "%s(%d): _gcmap.logical = 0x%08X\n",
-			__func__, __LINE__, (unsigned int) _gcmap.logical);
-	GC_PRINT(KERN_ERR "%s(%d): _gcmap.size = %d\n",
-			__func__, __LINE__, _gcmap.size);
-
 	/* Initialize the mapping parameters. */
 	mem.base = ((u32) _gcmap.logical) & ~(PAGE_SIZE - 1);
 	mem.offset = ((u32) _gcmap.logical) & (PAGE_SIZE - 1);
@@ -473,13 +411,6 @@ int gc_map(struct gcmap *gcmap)
 		goto exit;
 
 	_gcmap.handle = (unsigned int) mapped;
-
-#if MMU_ENABLE
-	mmu2d_dump(&client->ctxt);
-#endif
-
-	GC_PRINT(KERN_ERR "%s(%d): mapped address = 0x%08X\n",
-			__func__, __LINE__, mapped->address);
 
 exit:
 	if (copy_to_user(gcmap, &_gcmap, sizeof(struct gcmap))) {
@@ -595,25 +526,19 @@ static int __init gc_init(void)
 	int ret = 0;
 	u32 clock = 0;
 	struct clk *bb2d_clk;
-	int rate;
 
 	GC_PRINT(KERN_ERR "%s(%d): ****** %s %s ******\n",
 			 __func__, __LINE__, __DATE__, __TIME__);
 
 	bb2d_clk = clk_get(NULL, "bb2d_fck");
-	if (IS_ERR(bb2d_clk)) {
+	if (!bb2d_clk) {
 		GC_PRINT(KERN_ERR "%s(%d): cannot find bb2d_fck.\n",
 			 __func__, __LINE__);
 		return -EINVAL;
 	}
 
-	rate = clk_get_rate(bb2d_clk);
-	GC_PRINT(KERN_ERR
-		"%s(%d): BB2D clock is %dMHz\n",
-		__func__, __LINE__, (rate / 1000000));
-
-	ret = clk_enable(bb2d_clk);
-	if (ret < 0) {
+	if (clk_enable(bb2d_clk)) {
+		clk_put(bb2d_clk);
 		GC_PRINT(KERN_ERR "%s(%d): failed to enable bb2d_fck.\n",
 			 __func__, __LINE__);
 		return -EINVAL;
@@ -635,7 +560,12 @@ static int __init gc_init(void)
 		goto free_cdev;
 	}
 
+#if AT_TI
 	device = device_create(class, NULL, dev, NULL, GC_DEVICE);
+#else
+	device = device_create(class, NULL, dev, GC_DEVICE);
+#endif
+
 	if (IS_ERR(device)) {
 		ret = PTR_ERR(device);
 		goto free_class;
@@ -645,15 +575,15 @@ static int __init gc_init(void)
 	if (ret)
 		goto free_device;
 
-	g_reg_base = ioremap_nocache(DEVICE_REG_BASE, DEVICE_REG_SIZE);
-	if (!g_reg_base)
-		goto free_plat_reg;
-
 	/* TODO: clean this up in release call, after a blowup */
 	/* create interrupt handler */
 	ret = request_irq(DEVICE_INT, gc_irq, IRQF_SHARED, "gc-core",
 			&gcdevice);
 	if (ret)
+		goto free_plat_reg;
+
+	g_reg_base = ioremap_nocache(DEVICE_REG_BASE, DEVICE_REG_SIZE);
+	if (!g_reg_base)
 		goto free_plat_reg;
 
 	gcwq = create_workqueue("gcwq");

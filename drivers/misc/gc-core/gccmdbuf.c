@@ -19,10 +19,9 @@
 #include <linux/delay.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
-#include <linux/dma-mapping.h>
 
+#include <linux/gccore.h>
 #include "gcreg.h"
-#include "gcmain.h"
 #include "gccmdbuf.h"
 
 #define GC_ENABLE_GPU_COUNTERS	1
@@ -189,12 +188,6 @@ int cmdbuf_flush(u32 *logical)
 		GC_PRINT("starting DMA at 0x%08X with count of %d\n",
 			base, count);
 
-#if USE_DMA_COHERENT
-		dma_sync_single_for_device(NULL, cmdbuf.page.physical,
-						cmdbuf.page.size,
-						DMA_TO_DEVICE);
-#endif
-
 #if GC_DUMP || GC_ENABLE_GPU_COUNTERS
 		/* Reset hardware counters. */
 		gc_write_reg(GC_RESET_MEM_COUNTERS_Address, 1);
@@ -340,8 +333,6 @@ void gpu_status(char *function, int line, u32 acknowledge)
 	}
 
 	if (acknowledge & 0x40000000) {
-		u32 mtlb, stlb, offset;
-
 		GC_PRINT(KERN_INFO "%s(%d):   *** MMU ERROR ***\n",
 			function, line);
 
@@ -383,25 +374,9 @@ void gpu_status(char *function, int line, u32 acknowledge)
 
 			address = gc_read_reg(GCREG_MMU_EXCEPTION_Address + i);
 
-			mtlb   = (address & MMU_MTLB_MASK) >> MMU_MTLB_SHIFT;
-			stlb   = (address & MMU_STLB_MASK) >> MMU_STLB_SHIFT;
-			offset =  address & MMU_OFFSET_MASK;
-
 			GC_PRINT(KERN_INFO
 				"%s(%d):   MMU%d: exception address = 0x%08X\n",
 				function, line, i, address);
-
-			GC_PRINT(KERN_INFO
-				"%s(%d):            MTLB entry = %d\n",
-				function, line, mtlb);
-
-			GC_PRINT(KERN_INFO
-				"%s(%d):            STLB entry = %d\n",
-				function, line, stlb);
-
-			GC_PRINT(KERN_INFO
-				"%s(%d):            Offset = 0x%08X (%d)\n",
-				function, line, offset, offset);
 		}
 	}
 }
