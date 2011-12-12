@@ -1165,8 +1165,8 @@ static struct omap_board_mux board_mux[] __initdata = {
 #endif
 
 /*
- * LPDDR2 Configeration Data:
- * The memory organisation is as below :
+ * LPDDR2 Configuration Data for 4430/4460 SOMs:
+ * The memory organization is as below :
  *	EMIF1 - CS0 -	2 Gb
  *		CS1 -	2 Gb
  *	EMIF2 - CS0 -	2 Gb
@@ -1179,6 +1179,20 @@ static struct omap_board_mux board_mux[] __initdata = {
 static __initdata struct emif_device_details emif_devices = {
 	.cs0_device = &lpddr2_elpida_2G_S4_dev,
 	.cs1_device = &lpddr2_elpida_2G_S4_dev
+};
+
+/*
+ * LPDDR2 Configuration Data for 4470 SOMs:
+ * The memory organization is as below :
+ *	EMIF1 - CS0 -	4 Gb
+ *	EMIF2 - CS0 -	4 Gb
+ *	--------------------
+ *	TOTAL -		8 Gb
+ *
+ * Same devices installed on EMIF1 and EMIF2
+ */
+static __initdata struct emif_device_details emif_devices_4470 = {
+	.cs0_device = &lpddr2_elpida_4G_S4_dev,
 };
 
 static struct omap_device_pad blaze_uart1_pads[] __initdata = {
@@ -1375,7 +1389,11 @@ static void __init omap_4430sdp_init(void)
 		package = OMAP_PACKAGE_CBL;
 	omap4_mux_init(board_mux, NULL, package);
 
-	omap_emif_setup_device_details(&emif_devices, &emif_devices);
+	if (cpu_is_omap447x())
+		omap_emif_setup_device_details(&emif_devices_4470,
+					       &emif_devices_4470);
+	else
+		omap_emif_setup_device_details(&emif_devices, &emif_devices);
 
 	omap_board_config = sdp4430_config;
 	omap_board_config_size = ARRAY_SIZE(sdp4430_config);
