@@ -19,28 +19,8 @@ static DEFINE_MUTEX(gsCCBLock);
 #define PVRSRV_UNLOCK_CCB()	mutex_unlock(&gsCCBLock)
 #endif /* __linux__ */
 
-#define PVRSRV_REFCOUNT_CCB_MAX			512
+#define PVRSRV_REFCOUNT_CCB_MAX			256
 #define PVRSRV_REFCOUNT_CCB_MESG_MAX	80
-
-#define PVRSRV_REFCOUNT_CCB_DEBUG_SYNCINFO	(1U << 0)
-#define PVRSRV_REFCOUNT_CCB_DEBUG_MEMINFO	(1U << 1)
-#define PVRSRV_REFCOUNT_CCB_DEBUG_BM_BUF	(1U << 2)
-#define PVRSRV_REFCOUNT_CCB_DEBUG_BM_BUF2	(1U << 3)
-
-#if defined(__linux__)
-#define PVRSRV_REFCOUNT_CCB_DEBUG_MMAP		(1U << 4)
-#define PVRSRV_REFCOUNT_CCB_DEBUG_MMAP2		(1U << 5)
-#else
-#define PVRSRV_REFCOUNT_CCB_DEBUG_MMAP		0
-#define PVRSRV_REFCOUNT_CCB_DEBUG_MMAP2		0
-#endif
-
-#define PVRSRV_REFCOUNT_CCB_DEBUG_ALL		~0U
-
-/*static const IMG_UINT guiDebugMask = PVRSRV_REFCOUNT_CCB_DEBUG_ALL;*/
-static const IMG_UINT guiDebugMask =
-	PVRSRV_REFCOUNT_CCB_DEBUG_SYNCINFO |
-	PVRSRV_REFCOUNT_CCB_DEBUG_MMAP2;
 
 typedef struct
 {
@@ -95,9 +75,6 @@ void PVRSRVKernelSyncInfoIncRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 								 PVRSRV_KERNEL_SYNC_INFO *psKernelSyncInfo,
 								 PVRSRV_KERNEL_MEM_INFO *psKernelMemInfo)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_SYNCINFO))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -118,8 +95,6 @@ void PVRSRVKernelSyncInfoIncRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	psKernelSyncInfo->ui32RefCount++;
 }
 
@@ -128,9 +103,6 @@ void PVRSRVKernelSyncInfoDecRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 								 PVRSRV_KERNEL_SYNC_INFO *psKernelSyncInfo,
 								 PVRSRV_KERNEL_MEM_INFO *psKernelMemInfo)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_SYNCINFO))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -151,8 +123,6 @@ void PVRSRVKernelSyncInfoDecRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	psKernelSyncInfo->ui32RefCount--;
 }
 
@@ -160,9 +130,6 @@ IMG_INTERNAL
 void PVRSRVKernelMemInfoIncRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 								PVRSRV_KERNEL_MEM_INFO *psKernelMemInfo)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_MEMINFO))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -183,8 +150,6 @@ void PVRSRVKernelMemInfoIncRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	psKernelMemInfo->ui32RefCount++;
 }
 
@@ -192,9 +157,6 @@ IMG_INTERNAL
 void PVRSRVKernelMemInfoDecRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 								PVRSRV_KERNEL_MEM_INFO *psKernelMemInfo)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_MEMINFO))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -215,17 +177,12 @@ void PVRSRVKernelMemInfoDecRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	psKernelMemInfo->ui32RefCount--;
 }
 
 IMG_INTERNAL
 void PVRSRVBMBufIncRef2(const IMG_CHAR *pszFile, IMG_INT iLine, BM_BUF *pBuf)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_BM_BUF))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -246,17 +203,12 @@ void PVRSRVBMBufIncRef2(const IMG_CHAR *pszFile, IMG_INT iLine, BM_BUF *pBuf)
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	pBuf->ui32RefCount++;
 }
 
 IMG_INTERNAL
 void PVRSRVBMBufDecRef2(const IMG_CHAR *pszFile, IMG_INT iLine, BM_BUF *pBuf)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_BM_BUF))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -277,17 +229,12 @@ void PVRSRVBMBufDecRef2(const IMG_CHAR *pszFile, IMG_INT iLine, BM_BUF *pBuf)
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	pBuf->ui32RefCount--;
 }
 
 IMG_INTERNAL
 void PVRSRVBMBufIncExport2(const IMG_CHAR *pszFile, IMG_INT iLine, BM_BUF *pBuf)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_BM_BUF2))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -308,17 +255,12 @@ void PVRSRVBMBufIncExport2(const IMG_CHAR *pszFile, IMG_INT iLine, BM_BUF *pBuf)
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	pBuf->ui32ExportCount++;
 }
 
 IMG_INTERNAL
 void PVRSRVBMBufDecExport2(const IMG_CHAR *pszFile, IMG_INT iLine, BM_BUF *pBuf)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_BM_BUF2))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -339,8 +281,6 @@ void PVRSRVBMBufDecExport2(const IMG_CHAR *pszFile, IMG_INT iLine, BM_BUF *pBuf)
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	pBuf->ui32ExportCount--;
 }
 
@@ -352,9 +292,6 @@ IMG_INTERNAL
 void PVRSRVOffsetStructIncRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 							   PKV_OFFSET_STRUCT psOffsetStruct)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_MMAP))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -375,8 +312,6 @@ void PVRSRVOffsetStructIncRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	psOffsetStruct->ui32RefCount++;
 }
 
@@ -384,9 +319,6 @@ IMG_INTERNAL
 void PVRSRVOffsetStructDecRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 							   PKV_OFFSET_STRUCT psOffsetStruct)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_MMAP))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -407,8 +339,6 @@ void PVRSRVOffsetStructDecRef2(const IMG_CHAR *pszFile, IMG_INT iLine,
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	psOffsetStruct->ui32RefCount--;
 }
 
@@ -416,9 +346,6 @@ IMG_INTERNAL
 void PVRSRVOffsetStructIncMapped2(const IMG_CHAR *pszFile, IMG_INT iLine,
 								  PKV_OFFSET_STRUCT psOffsetStruct)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_MMAP2))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -439,8 +366,6 @@ void PVRSRVOffsetStructIncMapped2(const IMG_CHAR *pszFile, IMG_INT iLine,
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	psOffsetStruct->ui32Mapped++;
 }
 
@@ -448,9 +373,6 @@ IMG_INTERNAL
 void PVRSRVOffsetStructDecMapped2(const IMG_CHAR *pszFile, IMG_INT iLine,
 								  PKV_OFFSET_STRUCT psOffsetStruct)
 {
-	if(!(guiDebugMask & PVRSRV_REFCOUNT_CCB_DEBUG_MMAP2))
-		goto skip;
-
 	PVRSRV_LOCK_CCB();
 
 	gsRefCountCCB[giOffset].pszFile = pszFile;
@@ -471,8 +393,6 @@ void PVRSRVOffsetStructDecMapped2(const IMG_CHAR *pszFile, IMG_INT iLine,
 	giOffset = (giOffset + 1) % PVRSRV_REFCOUNT_CCB_MAX;
 
 	PVRSRV_UNLOCK_CCB();
-
-skip:
 	psOffsetStruct->ui32Mapped--;
 }
 
