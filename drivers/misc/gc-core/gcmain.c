@@ -174,6 +174,13 @@ void gc_free_pages(struct gcpage *p)
 
 void gc_flush_pages(struct gcpage *p)
 {
+	GC_PRINT(KERN_ERR "%s(%d): p->logical=0x%08X\n",
+		__func__, __LINE__, (unsigned int) p->logical);
+	GC_PRINT(KERN_ERR "%s(%d): p->physical=0x%08X\n",
+		__func__, __LINE__, p->physical);
+	GC_PRINT(KERN_ERR "%s(%d): p->size=%d\n",
+		__func__, __LINE__, p->size);
+
 	dmac_flush_range(p->logical, (unsigned char *) p->logical + p->size);
 	outer_flush_range(p->physical, p->physical + p->size);
 }
@@ -420,9 +427,11 @@ int gc_map(struct gcmap *gcmap)
 	if (_gcmap.gcerror != GCERR_NONE)
 		goto exit;
 
-	GC_PRINT(KERN_ERR "%s(%d): _gcmap.logical = 0x%08X\n",
+	GC_PRINT(KERN_ERR "%s(%d): map client buffer\n",
+			__func__, __LINE__);
+	GC_PRINT(KERN_ERR "%s(%d):   logical = 0x%08X\n",
 			__func__, __LINE__, (unsigned int) _gcmap.logical);
-	GC_PRINT(KERN_ERR "%s(%d): _gcmap.size = %d\n",
+	GC_PRINT(KERN_ERR "%s(%d):   size = %d\n",
 			__func__, __LINE__, _gcmap.size);
 
 	/* Initialize the mapping parameters. */
@@ -443,8 +452,10 @@ int gc_map(struct gcmap *gcmap)
 	mmu2d_dump(&client->ctxt);
 #endif
 
-	GC_PRINT(KERN_ERR "%s(%d): mapped address = 0x%08X\n",
+	GC_PRINT(KERN_ERR "%s(%d):   mapped address = 0x%08X\n",
 			__func__, __LINE__, mapped->address);
+	GC_PRINT(KERN_ERR "%s(%d):   handle = 0x%08X\n",
+			__func__, __LINE__, (unsigned int) mapped);
 
 exit:
 	if (copy_to_user(gcmap, &_gcmap, sizeof(struct gcmap))) {
@@ -473,6 +484,15 @@ int gc_unmap(struct gcmap *gcmap)
 		_gcmap.gcerror = GCERR_USER_READ;
 		goto exit;
 	}
+
+	GC_PRINT(KERN_ERR "%s(%d): unmap client buffer\n",
+			__func__, __LINE__);
+	GC_PRINT(KERN_ERR "%s(%d):   logical = 0x%08X\n",
+			__func__, __LINE__, (unsigned int) _gcmap.logical);
+	GC_PRINT(KERN_ERR "%s(%d):   size = %d\n",
+			__func__, __LINE__, _gcmap.size);
+	GC_PRINT(KERN_ERR "%s(%d):   handle = 0x%08X\n",
+			__func__, __LINE__, _gcmap.handle);
 
 	/* Locate the client entry. */
 	_gcmap.gcerror = find_client(&client);

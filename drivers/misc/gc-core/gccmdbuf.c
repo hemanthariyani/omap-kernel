@@ -26,7 +26,7 @@
 #define GC_ENABLE_GPU_COUNTERS	1
 
 #ifndef GC_DUMP
-#	define GC_DUMP 1
+#	define GC_DUMP 0
 #endif
 
 #if GC_DUMP
