@@ -18,8 +18,6 @@
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/wait.h>
-#include <linux/sched.h>
-#include <linux/dma-mapping.h>
 
 #include "gcreg.h"
 #include "gcmain.h"
@@ -28,7 +26,7 @@
 #define GC_ENABLE_GPU_COUNTERS	1
 
 #ifndef GC_DUMP
-#	define GC_DUMP 0
+#	define GC_DUMP 1
 #endif
 
 #if GC_DUMP
@@ -189,11 +187,7 @@ int cmdbuf_flush(u32 *logical)
 		GC_PRINT("starting DMA at 0x%08X with count of %d\n",
 			base, count);
 
-#if USE_DMA_COHERENT
-		dma_sync_single_for_device(NULL, cmdbuf.page.physical,
-						cmdbuf.page.size,
-						DMA_TO_DEVICE);
-#endif
+		gc_flush_pages(&cmdbuf.page);
 
 #if GC_DUMP || GC_ENABLE_GPU_COUNTERS
 		/* Reset hardware counters. */

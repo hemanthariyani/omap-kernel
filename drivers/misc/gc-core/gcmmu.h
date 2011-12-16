@@ -18,7 +18,7 @@
 #include <linux/gccore.h>
 #include "gcmain.h"
 
-#define MMU_ENABLE 0
+#define MMU_ENABLE 1
 
 /*
  * Master table can be configured in 1KB mode with 256 maximum entries
@@ -110,6 +110,9 @@ struct mmu2darena {
 
 	/* Mapped virtual pointer. */
 	u32 address;
+
+	/* Client's virtual pointer. */
+	void *logical;
 
 	/* Page descriptor array. */
 	struct page **pages;

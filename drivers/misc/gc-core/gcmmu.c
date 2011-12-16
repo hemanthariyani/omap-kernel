@@ -19,7 +19,6 @@
 #include <linux/io.h>
 #include <linux/pagemap.h>
 #include <linux/sched.h>
-#include <linux/dma-mapping.h>
 
 #include "gcreg.h"
 #include "gcmmu.h"
@@ -76,17 +75,17 @@ static inline struct mmu2dprivate *get_mmu(void)
 	return &_mmu;
 }
 
-u32 get_mtlb_present(u32 entry)
+static u32 get_mtlb_present(u32 entry)
 {
 	return entry & MMU_MTLB_PRESENT_MASK;
 }
 
-u32 get_stlb_present(u32 entry)
+static u32 get_stlb_present(u32 entry)
 {
 	return entry & MMU_STLB_PRESENT_MASK;
 }
 
-void print_mtlb_entry(u32 index, u32 entry)
+static void print_mtlb_entry(u32 index, u32 entry)
 {
 	GC_PRINT(KERN_ERR
 		"  entry[%03d]: 0x%08X (stlb=0x%08X, ps=%d, ex=%d, pr=%d)\n",
@@ -99,7 +98,7 @@ void print_mtlb_entry(u32 index, u32 entry)
 			);
 }
 
-void print_stlb_entry(u32 index, u32 entry)
+static void print_stlb_entry(u32 index, u32 entry)
 {
 	GC_PRINT(KERN_ERR
 		"  entry[%03d]: 0x%08X (user=0x%08X, wr=%d, ex=%d, pr=%d)\n",
@@ -529,6 +528,9 @@ static enum gcerror get_physical_pages(struct mmu2dphysmem *mem,
 	/* Get base address shortcut. */
 	base = mem->base;
 
+	/* Store the logical pointer. */
+	arena->logical = (void *) base;
+
 	/*
 	 * Important Note: base is mapped from user application process
 	 * to current process - it must lie completely within the current
@@ -590,7 +592,7 @@ exit:
 	return gcerror;
 }
 
-void release_physical_pages(struct mmu2darena *arena)
+static void release_physical_pages(struct mmu2darena *arena)
 {
 	u32 i;
 
@@ -600,6 +602,58 @@ void release_physical_pages(struct mmu2darena *arena)
 
 		kfree(arena->pages);
 		arena->pages = NULL;
+	}
+}
+
+static void flush_user_buffer(struct mmu2darena *arena)
+{
+	u32 i;
+	struct gcpage gcpage;
+	unsigned char *logical;
+
+	if (arena->pages == NULL) {
+		GC_PRINT(KERN_ERR "%s(%d): page array is NULL.\n",
+			__func__, __LINE__);
+		return;
+	}
+
+
+	logical = arena->logical;
+	if (logical == NULL) {
+		GC_PRINT(KERN_ERR "%s(%d): buffer base is NULL.\n",
+			__func__, __LINE__);
+			return;
+	}
+
+	for (i = 0; i < arena->count; i += 1) {
+		gcpage.order = get_order(PAGE_SIZE);
+		gcpage.size = PAGE_SIZE;
+
+		gcpage.pages = arena->pages[i];
+		if (gcpage.pages == NULL) {
+			GC_PRINT(KERN_ERR
+				"%s(%d): page structure %d is NULL.\n",
+				__func__, __LINE__, i);
+			continue;
+		}
+
+		gcpage.physical = page_to_phys(gcpage.pages);
+		if (gcpage.physical == 0) {
+			GC_PRINT(KERN_ERR
+				"%s(%d): physical address of page %d is 0.\n",
+				__func__, __LINE__, i);
+			continue;
+		}
+
+		gcpage.logical = (unsigned int *) (logical + i * PAGE_SIZE);
+		if (gcpage.logical == NULL) {
+			GC_PRINT(KERN_ERR
+				"%s(%d): virtual address of page %d is NULL.\n",
+				__func__, __LINE__, i);
+			continue;
+		}
+
+		gc_flush_pages(&gcpage);
 	}
 }
 
@@ -734,21 +788,7 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 			parray += 1;
 		}
 
-#if USE_DMA_COHERENT
-#if 1
-		dma_sync_single_for_device(NULL, ctxt->slave[i]->pages.physical,
-						ctxt->slave[i]->pages.size,
-						DMA_TO_DEVICE);
-#elif 0
-		dmac_flush_range(ctxt->slave[i]->pages.logical,
-					(unsigned char *)
-					ctxt->slave[i]->pages.logical +
-					ctxt->slave[i]->pages.size);
-#else
-	/*flush_kern_dcache_area(_gcmap.logical, _gcmap.size);*/
-	flush_cache_all();
-#endif
-#endif
+		gc_flush_pages(&ctxt->slave[i]->pages);
 #endif
 
 		count -= available;
@@ -756,20 +796,7 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 	}
 
 #if MMU_ENABLE
-#if USE_DMA_COHERENT
-#if 1
-	dma_sync_single_for_device(NULL, ctxt->master.physical,
-					ctxt->master.size, DMA_TO_DEVICE);
-#elif 0
-	dmac_flush_range(ctxt->master.logical,
-				(unsigned char *)
-				ctxt->master.logical +
-				ctxt->master.size);
-#else
-	/*flush_kern_dcache_area(_gcmap.logical, _gcmap.size);*/
-	flush_cache_all();
-#endif
-#endif
+	gc_flush_pages(&ctxt->master);
 #endif
 
 	/*
@@ -1099,6 +1126,7 @@ enum gcerror mmu2d_fixup(
 			offset = *table++;
 			arena = (struct mmu2darena *) data[offset];
 			data[offset] = arena->address;
+			flush_user_buffer(arena);
 		}
 
 		/* Get the next fixup. */

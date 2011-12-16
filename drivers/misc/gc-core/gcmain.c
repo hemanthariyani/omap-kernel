@@ -98,46 +98,6 @@ void gc_write_reg(unsigned int address, unsigned int data)
  * Page allocation routines.
  */
 
-#if USE_DMA_COHERENT
-enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
-{
-	enum gcerror gcerror;
-
-	gcpage->size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-
-	gcpage->physical = ~0UL;
-	gcpage->logical = dma_alloc_coherent(NULL,
-						gcpage->size,
-						&gcpage->physical,
-						GFP_KERNEL);
-
-	if (gcpage->logical == NULL) {
-		gcerror = GCERR_OOPM;
-		goto fail;
-	}
-
-	GC_PRINT(KERN_ERR "%s(%d): logical=0x%08X physical=0x%08X, size=%d\n",
-		__func__, __LINE__, (unsigned int) gcpage->logical,
-		(unsigned int) gcpage->physical, gcpage->size);
-
-	return GCERR_NONE;
-
-fail:
-	return gcerror;
-}
-
-void gc_free_pages(struct gcpage *p)
-{
-	if (p->logical != NULL) {
-		dma_free_coherent(NULL, p->size, p->logical, p->physical);
-
-		p->logical = NULL;
-		p->physical = ~0UL;
-	}
-
-	p->size = 0;
-}
-#else
 enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
 {
 	enum gcerror gcerror;
@@ -211,7 +171,12 @@ void gc_free_pages(struct gcpage *p)
 	p->order = 0;
 	p->size = 0;
 }
-#endif
+
+void gc_flush_pages(struct gcpage *p)
+{
+	dmac_flush_range(p->logical, (unsigned char *) p->logical + p->size);
+	outer_flush_range(p->physical, p->physical + p->size);
+}
 
 /*******************************************************************************
  * Interrupt handling.
