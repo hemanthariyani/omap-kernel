@@ -448,10 +448,6 @@ int gc_map(struct gcmap *gcmap)
 
 	_gcmap.handle = (unsigned int) mapped;
 
-#if MMU_ENABLE
-	mmu2d_dump(&client->ctxt);
-#endif
-
 	GC_PRINT(KERN_ERR "%s(%d):   mapped address = 0x%08X\n",
 			__func__, __LINE__, mapped->address);
 	GC_PRINT(KERN_ERR "%s(%d):   handle = 0x%08X\n",

@@ -32,6 +32,10 @@
 #	define GC_DUMP 0
 #endif
 
+#ifndef GC_DUMP_MMU
+#	define GC_DUMP_MMU 0
+#endif
+
 #if GC_DUMP
 #	define GC_PRINT printk
 #else
@@ -75,6 +79,7 @@ static inline struct mmu2dprivate *get_mmu(void)
 	return &_mmu;
 }
 
+#if GC_DUMP_MMU
 static u32 get_mtlb_present(u32 entry)
 {
 	return entry & MMU_MTLB_PRESENT_MASK;
@@ -165,6 +170,7 @@ static void mmu2d_dump_table(struct mm2dtable *desc, struct gcpage *table)
 			skipped);
 	}
 }
+#endif
 
 /*
  * Arena record management.
@@ -208,28 +214,37 @@ static void mmu2d_free_arena(struct mmu2dprivate *mmu, struct mmu2darena *arena)
 
 static int mmu2d_siblings(struct mmu2darena *arena1, struct mmu2darena *arena2)
 {
-	u32 mtlb_idx, stlb_idx;
-	u32 count, available;
+	int result;
 
-	mtlb_idx = arena1->mtlb;
-	stlb_idx = arena1->stlb;
-	count = arena1->count;
+	if ((arena1 == NULL) || (arena2 == NULL)) {
+		result = 0;
+	} else {
+		u32 mtlb_idx, stlb_idx;
+		u32 count, available;
 
-	while (count > 0) {
-		available = MMU_STLB_ENTRY_NUM - stlb_idx;
+		mtlb_idx = arena1->mtlb;
+		stlb_idx = arena1->stlb;
+		count = arena1->count;
 
-		if (available > count) {
-			available = count;
-			stlb_idx += count;
-		} else {
-			mtlb_idx += 1;
-			stlb_idx  = 0;
+		while (count > 0) {
+			available = MMU_STLB_ENTRY_NUM - stlb_idx;
+
+			if (available > count) {
+				available = count;
+				stlb_idx += count;
+			} else {
+				mtlb_idx += 1;
+				stlb_idx  = 0;
+			}
+
+			count -= available;
 		}
 
-		count -= available;
+		result = (mtlb_idx == arena2->mtlb)
+			&& (stlb_idx == arena2->stlb);
 	}
 
-	return ((mtlb_idx == arena2->mtlb) && (stlb_idx == arena2->stlb));
+	return result;
 }
 
 /*
@@ -279,14 +294,178 @@ static enum gcerror mmu2d_allocate_slave(struct mmu2dcontext *ctxt,
 	*stlb = temp;
 	return GCERR_NONE;
 }
-
-static void mmu2d_free_slave(struct mmu2dcontext *ctxt, struct mmu2dstlb *slave)
-{
-	gc_free_pages(&slave->pages);
-	slave->next = ctxt->slave_recs;
-	ctxt->slave_recs = slave;
-}
 #endif
+
+static enum gcerror virt2phys(u32 logical, pte_t *physical)
+{
+	pgd_t *pgd;	/* Page Global Directory (PGD). */
+	pmd_t *pmd;	/* Page Middle Directory (PMD). */
+	pte_t *pte;	/* Page Table Entry (PTE). */
+
+	/* Get the pointer to the entry in PGD for the address. */
+	pgd = pgd_offset(current->mm, logical);
+	if (pgd_none(*pgd) || pgd_bad(*pgd))
+		return GCERR_MMU_PAGE_BAD;
+
+	/* Get the pointer to the entry in PMD for the address. */
+	pmd = pmd_offset(pgd, logical);
+	if (pmd_none(*pmd) || pmd_bad(*pmd))
+		return GCERR_MMU_PAGE_BAD;
+
+	/* Get the pointer to the entry in PTE for the address. */
+	pte = pte_offset_map(pmd, logical);
+	if ((pte == NULL) || !pte_present(*pte))
+		return GCERR_MMU_PAGE_BAD;
+
+	*physical = (*pte & PAGE_MASK) | (logical & ~PAGE_MASK);
+	return GCERR_NONE;
+}
+
+static enum gcerror get_physical_pages(struct mmu2dphysmem *mem,
+					pte_t *parray,
+					struct mmu2darena *arena)
+{
+	enum gcerror gcerror = GCERR_NONE;
+	struct vm_area_struct *vma;
+	struct page **pages = NULL;
+	u32 base, write;
+	int i, count = 0;
+
+	/* Reset page descriptor array. */
+	arena->pages = NULL;
+
+	/* Get base address shortcut. */
+	base = mem->base;
+
+	/* Store the logical pointer. */
+	arena->logical = (void *) base;
+
+	/*
+	 * Important Note: base is mapped from user application process
+	 * to current process - it must lie completely within the current
+	 * virtual memory address space in order to be of use to us here.
+	 */
+
+	vma = find_vma(current->mm, base + (mem->count << PAGE_SHIFT) - 1);
+	if ((vma == NULL) || (base < vma->vm_start)) {
+		gcerror = GCERR_MMU_BUFFER_BAD;
+		goto exit;
+	}
+
+	/* Allocate page descriptor array. */
+	pages = kmalloc(mem->count * sizeof(struct page *), GFP_KERNEL);
+	if (pages == NULL) {
+		gcerror = GCERR_SETGRP(GCERR_OODM, GCERR_MMU_DESC_ALLOC);
+		goto exit;
+	}
+
+	/* Query page descriptors. */
+	write = ((vma->vm_flags & (VM_WRITE | VM_MAYWRITE)) != 0) ? 1 : 0;
+	count = get_user_pages(current, current->mm, base, mem->count,
+				write, 1, pages, NULL);
+
+	if (count < 0) {
+		/* Kernel allocated buffer. */
+		for (i = 0; i < mem->count; i += 1) {
+			gcerror = virt2phys(base, &parray[i]);
+			if (gcerror != GCERR_NONE)
+				goto exit;
+
+			base += mem->pagesize;
+		}
+	} else if (count == mem->count) {
+		/* User allocated buffer. */
+		for (i = 0; i < mem->count; i += 1) {
+			parray[i] = page_to_phys(pages[i]);
+			if (phys_to_page(parray[i]) != pages[i]) {
+				gcerror = GCERR_MMU_PAGE_BAD;
+				goto exit;
+			}
+		}
+
+		/* Set page descriptor array. */
+		arena->pages = pages;
+	} else {
+		gcerror = GCERR_MMU_BUFFER_BAD;
+		goto exit;
+	}
+
+exit:
+	if (arena->pages == NULL) {
+		for (i = 0; i < count; i += 1)
+			page_cache_release(pages[i]);
+
+		if (pages != NULL)
+			kfree(pages);
+	}
+
+	return gcerror;
+}
+
+static void release_physical_pages(struct mmu2darena *arena)
+{
+	u32 i;
+
+	if (arena->pages != NULL) {
+		for (i = 0; i < arena->count; i += 1)
+			page_cache_release(arena->pages[i]);
+
+		kfree(arena->pages);
+		arena->pages = NULL;
+	}
+}
+
+static void flush_user_buffer(struct mmu2darena *arena)
+{
+	u32 i;
+	struct gcpage gcpage;
+	unsigned char *logical;
+
+	if (arena->pages == NULL) {
+		GC_PRINT(KERN_ERR "%s(%d): page array is NULL.\n",
+			__func__, __LINE__);
+		return;
+	}
+
+
+	logical = arena->logical;
+	if (logical == NULL) {
+		GC_PRINT(KERN_ERR "%s(%d): buffer base is NULL.\n",
+			__func__, __LINE__);
+			return;
+	}
+
+	for (i = 0; i < arena->count; i += 1) {
+		gcpage.order = get_order(PAGE_SIZE);
+		gcpage.size = PAGE_SIZE;
+
+		gcpage.pages = arena->pages[i];
+		if (gcpage.pages == NULL) {
+			GC_PRINT(KERN_ERR
+				"%s(%d): page structure %d is NULL.\n",
+				__func__, __LINE__, i);
+			continue;
+		}
+
+		gcpage.physical = page_to_phys(gcpage.pages);
+		if (gcpage.physical == 0) {
+			GC_PRINT(KERN_ERR
+				"%s(%d): physical address of page %d is 0.\n",
+				__func__, __LINE__, i);
+			continue;
+		}
+
+		gcpage.logical = (unsigned int *) (logical + i * PAGE_SIZE);
+		if (gcpage.logical == NULL) {
+			GC_PRINT(KERN_ERR
+				"%s(%d): virtual address of page %d is NULL.\n",
+				__func__, __LINE__, i);
+			continue;
+		}
+
+		gc_flush_pages(&gcpage);
+	}
+}
 
 enum gcerror mmu2d_create_context(struct mmu2dcontext *ctxt)
 {
@@ -421,6 +600,7 @@ fail:
 enum gcerror mmu2d_destroy_context(struct mmu2dcontext *ctxt)
 {
 	int i;
+	struct mmu2dstlbblock *nextblock;
 
 	if ((ctxt == NULL) || (ctxt->mmu == NULL))
 		return GCERR_MMU_CTXT_BAD;
@@ -436,6 +616,16 @@ enum gcerror mmu2d_destroy_context(struct mmu2dcontext *ctxt)
 		ctxt->slave = NULL;
 	}
 
+	gc_free_pages(&ctxt->master);
+
+	while (ctxt->slave_blocks != NULL) {
+		nextblock = ctxt->slave_blocks->next;
+		kfree(ctxt->slave_blocks);
+		ctxt->slave_blocks = nextblock;
+	}
+
+	ctxt->slave_recs = NULL;
+
 	while (ctxt->allocated != NULL) {
 		mmu2d_free_arena(ctxt->mmu, ctxt->allocated);
 		ctxt->allocated = ctxt->allocated->next;
@@ -445,8 +635,6 @@ enum gcerror mmu2d_destroy_context(struct mmu2dcontext *ctxt)
 		mmu2d_free_arena(ctxt->mmu, ctxt->vacant);
 		ctxt->vacant = ctxt->vacant->next;
 	}
-
-	gc_free_pages(&ctxt->master);
 
 	ctxt->mmu->refcount -= 1;
 	ctxt->mmu = NULL;
@@ -487,176 +675,6 @@ enum gcerror mmu2d_set_master(struct mmu2dcontext *ctxt)
 	return GCERR_NONE;
 }
 
-static enum gcerror virt2phys(u32 logical, pte_t *physical)
-{
-	pgd_t *pgd;	/* Page Global Directory (PGD). */
-	pmd_t *pmd;	/* Page Middle Directory (PMD). */
-	pte_t *pte;	/* Page Table Entry (PTE). */
-
-	/* Get the pointer to the entry in PGD for the address. */
-	pgd = pgd_offset(current->mm, logical);
-	if (pgd_none(*pgd) || pgd_bad(*pgd))
-		return GCERR_MMU_PAGE_BAD;
-
-	/* Get the pointer to the entry in PMD for the address. */
-	pmd = pmd_offset(pgd, logical);
-	if (pmd_none(*pmd) || pmd_bad(*pmd))
-		return GCERR_MMU_PAGE_BAD;
-
-	/* Get the pointer to the entry in PTE for the address. */
-	pte = pte_offset_map(pmd, logical);
-	if ((pte == NULL) || !pte_present(*pte))
-		return GCERR_MMU_PAGE_BAD;
-
-	*physical = (*pte & PAGE_MASK) | (logical & ~PAGE_MASK);
-	return GCERR_NONE;
-}
-
-static enum gcerror get_physical_pages(struct mmu2dphysmem *mem,
-					pte_t *parray,
-					struct mmu2darena *arena)
-{
-	enum gcerror gcerror = GCERR_NONE;
-	struct vm_area_struct *vma;
-	struct page **pages = NULL;
-	u32 base, write;
-	int i, count = 0;
-
-	/* Reset page descriptor array. */
-	arena->pages = NULL;
-
-	/* Get base address shortcut. */
-	base = mem->base;
-
-	/* Store the logical pointer. */
-	arena->logical = (void *) base;
-
-	/*
-	 * Important Note: base is mapped from user application process
-	 * to current process - it must lie completely within the current
-	 * virtual memory address space in order to be of use to us here.
-	 */
-	vma = find_vma(current->mm, base + (mem->count << PAGE_SHIFT) - 1);
-	if ((vma == NULL) || (base < vma->vm_start)) {
-		gcerror = GCERR_MMU_BUFFER_BAD;
-		goto exit;
-	}
-
-	/* Allocate page descriptor array. */
-	pages = kmalloc(mem->count * sizeof(struct page *), GFP_KERNEL);
-	if (pages == NULL) {
-		gcerror = GCERR_SETGRP(GCERR_OODM, GCERR_MMU_DESC_ALLOC);
-		goto exit;
-	}
-
-	/* Query page descriptors. */
-	write = ((vma->vm_flags & (VM_WRITE | VM_MAYWRITE)) != 0) ? 1 : 0;
-	count = get_user_pages(current, current->mm, base, mem->count,
-				write, 1, pages, NULL);
-
-	if (count < 0) {
-		/* Kernel allocated buffer. */
-		for (i = 0; i < mem->count; i += 1) {
-			gcerror = virt2phys(base, &parray[i]);
-			if (gcerror != GCERR_NONE)
-				goto exit;
-
-			base += mem->pagesize;
-		}
-	} else if (count == mem->count) {
-		/* User allocated buffer. */
-		for (i = 0; i < mem->count; i += 1) {
-			parray[i] = page_to_phys(pages[i]);
-			if (phys_to_page(parray[i]) != pages[i]) {
-				gcerror = GCERR_MMU_PAGE_BAD;
-				goto exit;
-			}
-		}
-
-		/* Set page descriptor array. */
-		arena->pages = pages;
-	} else {
-		gcerror = GCERR_MMU_BUFFER_BAD;
-		goto exit;
-	}
-
-exit:
-	if (arena->pages == NULL) {
-		for (i = 0; i < count; i += 1)
-			page_cache_release(pages[i]);
-
-		if (pages != NULL)
-			kfree(pages);
-	}
-
-	return gcerror;
-}
-
-static void release_physical_pages(struct mmu2darena *arena)
-{
-	u32 i;
-
-	if (arena->pages != NULL) {
-		for (i = 0; i < arena->count; i += 1)
-			page_cache_release(arena->pages[i]);
-
-		kfree(arena->pages);
-		arena->pages = NULL;
-	}
-}
-
-static void flush_user_buffer(struct mmu2darena *arena)
-{
-	u32 i;
-	struct gcpage gcpage;
-	unsigned char *logical;
-
-	if (arena->pages == NULL) {
-		GC_PRINT(KERN_ERR "%s(%d): page array is NULL.\n",
-			__func__, __LINE__);
-		return;
-	}
-
-
-	logical = arena->logical;
-	if (logical == NULL) {
-		GC_PRINT(KERN_ERR "%s(%d): buffer base is NULL.\n",
-			__func__, __LINE__);
-			return;
-	}
-
-	for (i = 0; i < arena->count; i += 1) {
-		gcpage.order = get_order(PAGE_SIZE);
-		gcpage.size = PAGE_SIZE;
-
-		gcpage.pages = arena->pages[i];
-		if (gcpage.pages == NULL) {
-			GC_PRINT(KERN_ERR
-				"%s(%d): page structure %d is NULL.\n",
-				__func__, __LINE__, i);
-			continue;
-		}
-
-		gcpage.physical = page_to_phys(gcpage.pages);
-		if (gcpage.physical == 0) {
-			GC_PRINT(KERN_ERR
-				"%s(%d): physical address of page %d is 0.\n",
-				__func__, __LINE__, i);
-			continue;
-		}
-
-		gcpage.logical = (unsigned int *) (logical + i * PAGE_SIZE);
-		if (gcpage.logical == NULL) {
-			GC_PRINT(KERN_ERR
-				"%s(%d): virtual address of page %d is NULL.\n",
-				__func__, __LINE__, i);
-			continue;
-		}
-
-		gc_flush_pages(&gcpage);
-	}
-}
-
 enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 			struct mmu2darena **mapped)
 {
@@ -664,6 +682,7 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 	struct mmu2darena *prev, *vacant, *split;
 #if MMU_ENABLE
 	struct mmu2dstlb *stlb = NULL;
+	struct mmu2dstlb **stlb_array;
 	u32 *mtlb_logical, *stlb_logical;
 #endif
 	u32 mtlb_idx, stlb_idx, next_idx;
@@ -688,6 +707,9 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 	 * Find available sufficient arena.
 	 */
 
+	GC_PRINT(KERN_ERR "%s(%d): mapping (%d) pages\n",
+		__func__, __LINE__, mem->count);
+
 	prev = NULL;
 	vacant = ctxt->vacant;
 
@@ -702,6 +724,15 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 		gcerror = GCERR_MMU_OOM;
 		goto fail;
 	}
+
+	GC_PRINT(KERN_ERR "%s(%d): found vacant arena:\n",
+		__func__, __LINE__);
+	GC_PRINT(KERN_ERR "%s(%d):   mtlb=%d\n",
+		__func__, __LINE__, vacant->mtlb);
+	GC_PRINT(KERN_ERR "%s(%d):   stlb=%d\n",
+		__func__, __LINE__, vacant->stlb);
+	GC_PRINT(KERN_ERR "%s(%d):   count=%d\n",
+		__func__, __LINE__, vacant->count);
 
 	/*
 	 * Create page array.
@@ -727,13 +758,17 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 			goto fail;
 
 		parray = parray_alloc;
-	} else
+
+		GC_PRINT(KERN_ERR
+			"%s(%d): physical page array allocated (0x%08X)\n",
+			__func__, __LINE__, (unsigned int) parray);
+	} else {
 		parray = mem->pages;
 
-#if GC_DUMP
-	GC_PRINT(KERN_ERR "%s(%d): mapping (%d) pages:\n",
-		__func__, __LINE__, mem->count);
-#endif
+		GC_PRINT(KERN_ERR
+			"%s(%d): physical page array provided (0x%08X)\n",
+			__func__, __LINE__, (unsigned int) parray);
+	}
 
 	/*
 	 * Allocate slave tables as necessary.
@@ -745,6 +780,7 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 
 #if MMU_ENABLE
 	mtlb_logical = &ctxt->master.logical[mtlb_idx];
+	stlb_array = &ctxt->slave[mtlb_idx];
 #endif
 
 	for (i = 0; count > 0; i += 1) {
@@ -760,7 +796,7 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 				| MMU_MTLB_EXCEPTION
 				| MMU_MTLB_PRESENT;
 
-			ctxt->slave[i] = stlb;
+			stlb_array[i] = stlb;
 		}
 #endif
 
@@ -775,8 +811,8 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 		}
 
 #if MMU_ENABLE
-		stlb_logical = &ctxt->slave[i]->pages.logical[stlb_idx];
-		ctxt->slave[i]->count += available;
+		stlb_logical = &stlb_array[i]->pages.logical[stlb_idx];
+		stlb_array[i]->count += available;
 
 		for (j = 0; j < available; j += 1) {
 			stlb_logical[j]
@@ -788,7 +824,7 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 			parray += 1;
 		}
 
-		gc_flush_pages(&ctxt->slave[i]->pages);
+		gc_flush_pages(&stlb_array[i]->pages);
 #endif
 
 		count -= available;
@@ -875,6 +911,9 @@ enum gcerror mmu2d_unmap(struct mmu2dcontext *ctxt, struct mmu2darena *mapped)
 	 * Find the arena.
 	 */
 
+	GC_PRINT(KERN_ERR "%s(%d): unmapping arena 0x%08X\n",
+		__func__, __LINE__, (unsigned int) mapped);
+
 	prev = NULL;
 	allocated = ctxt->allocated;
 
@@ -890,6 +929,21 @@ enum gcerror mmu2d_unmap(struct mmu2dcontext *ctxt, struct mmu2darena *mapped)
 		gcerror = GCERR_MMU_ARG;
 		goto fail;
 	}
+
+	GC_PRINT(KERN_ERR "%s(%d): found allocated arena:\n",
+		__func__, __LINE__);
+	GC_PRINT(KERN_ERR "%s(%d):   mtlb=%d\n",
+		__func__, __LINE__, allocated->mtlb);
+	GC_PRINT(KERN_ERR "%s(%d):   stlb=%d\n",
+		__func__, __LINE__, allocated->stlb);
+	GC_PRINT(KERN_ERR "%s(%d):   count=%d\n",
+		__func__, __LINE__, allocated->count);
+	GC_PRINT(KERN_ERR "%s(%d):   address=0x%08X\n",
+		__func__, __LINE__, allocated->address);
+	GC_PRINT(KERN_ERR "%s(%d):   logical=0x%08X\n",
+		__func__, __LINE__, (unsigned int) allocated->logical);
+	GC_PRINT(KERN_ERR "%s(%d):   pages=0x%08X\n",
+		__func__, __LINE__, (unsigned int) allocated->pages);
 
 	mtlb_idx = allocated->mtlb;
 	stlb_idx = allocated->stlb;
@@ -929,11 +983,6 @@ enum gcerror mmu2d_unmap(struct mmu2dcontext *ctxt, struct mmu2darena *mapped)
 			stlb_logical[j] = MMU_STLB_ENTRY_VACANT;
 
 		stlb->count -= available;
-		if (stlb->count == 0) {
-			mmu2d_free_slave(ctxt, stlb);
-			ctxt->slave[mtlb_idx] = NULL;
-			ctxt->master.logical[mtlb_idx] = MMU_MTLB_ENTRY_VACANT;
-		}
 #endif
 
 		count -= available;
@@ -960,49 +1009,37 @@ enum gcerror mmu2d_unmap(struct mmu2dcontext *ctxt, struct mmu2darena *mapped)
 	vacant = ctxt->vacant;
 
 	while (vacant != NULL) {
-		if ((vacant->mtlb >= allocated->mtlb) &&
-				(vacant->stlb > allocated->stlb))
+		if ((vacant->mtlb > allocated->mtlb) ||
+			((vacant->mtlb == allocated->mtlb) &&
+			 (vacant->stlb  > allocated->stlb)))
 			break;
 		prev = vacant;
 		vacant = vacant->next;
 	}
 
-	if (prev == NULL) {
-		if (vacant == NULL) {
-			allocated->next = ctxt->vacant;
-			ctxt->vacant = allocated;
-		} else {
-			if (mmu2d_siblings(allocated, vacant)) {
-				vacant->mtlb   = allocated->mtlb;
-				vacant->stlb   = allocated->stlb;
-				vacant->count += allocated->count;
-				mmu2d_free_arena(ctxt->mmu, allocated);
-			} else {
-				allocated->next = ctxt->vacant;
-				ctxt->vacant = allocated;
-			}
-		}
-	} else {
-		if (mmu2d_siblings(prev, allocated)) {
-			if (mmu2d_siblings(allocated, vacant)) {
-				prev->count += allocated->count;
-				prev->count += vacant->count;
-				prev->next   = vacant->next;
-				mmu2d_free_arena(ctxt->mmu, allocated);
-				mmu2d_free_arena(ctxt->mmu, vacant);
-			} else {
-				prev->count += allocated->count;
-				mmu2d_free_arena(ctxt->mmu, allocated);
-			}
-		} else if (mmu2d_siblings(allocated, vacant)) {
-			vacant->mtlb   = allocated->mtlb;
-			vacant->stlb   = allocated->stlb;
-			vacant->count += allocated->count;
+	/* Insert between the previous and the next vacant arenas. */
+	if (mmu2d_siblings(prev, allocated)) {
+		if (mmu2d_siblings(allocated, vacant)) {
+			prev->count += allocated->count;
+			prev->count += vacant->count;
+			prev->next   = vacant->next;
 			mmu2d_free_arena(ctxt->mmu, allocated);
+			mmu2d_free_arena(ctxt->mmu, vacant);
 		} else {
-			allocated->next = vacant;
-			prev->next = allocated;
+			prev->count += allocated->count;
+			mmu2d_free_arena(ctxt->mmu, allocated);
 		}
+	} else if (mmu2d_siblings(allocated, vacant)) {
+		vacant->mtlb   = allocated->mtlb;
+		vacant->stlb   = allocated->stlb;
+		vacant->count += allocated->count;
+		mmu2d_free_arena(ctxt->mmu, allocated);
+	} else {
+		allocated->next = vacant;
+		if (prev == NULL)
+			ctxt->vacant = allocated;
+		else
+			prev->next = allocated;
 	}
 
 fail:
@@ -1139,6 +1176,7 @@ exit:
 
 void mmu2d_dump(struct mmu2dcontext *ctxt)
 {
+#if GC_DUMP_MMU
 	static struct mm2dtable mtlb_desc = {
 		"Master",
 		MMU_MTLB_ENTRY_NUM,
@@ -1207,4 +1245,6 @@ void mmu2d_dump(struct mmu2dcontext *ctxt)
 	for (i = 0; i < MMU_MTLB_ENTRY_NUM; i += 1)
 		if (ctxt->slave[i] != NULL)
 			mmu2d_dump_table(&stlb_desc, &ctxt->slave[i]->pages);
+
+#endif
 }
