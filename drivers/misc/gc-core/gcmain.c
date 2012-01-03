@@ -383,6 +383,23 @@ int gc_commit(struct gccommit *gccommit)
 	if (_gccommit.gcerror != GCERR_NONE)
 		goto exit;
 
+	/* Set 2D pipe. */
+	_gccommit.gcerror = cmdbuf_alloc(2 * sizeof(u32), &logical, &address);
+	if (_gccommit.gcerror != GCERR_NONE)
+		return _gccommit.gcerror;
+
+	/* Progfram master table address. */
+	logical[0]
+		= SETFIELDVAL(0, AQ_COMMAND_LOAD_STATE_COMMAND, OPCODE,
+			    LOAD_STATE)
+		| SETFIELD(0, AQ_COMMAND_LOAD_STATE_COMMAND, ADDRESS,
+			    AQPipeSelectRegAddrs)
+		| SETFIELD(0, AQ_COMMAND_LOAD_STATE_COMMAND, COUNT,
+			    1);
+
+	logical[1]
+		= AQ_PIPE_SELECT_PIPE_PIPE2D;
+
 	/* Set the client's master table. */
 	_gccommit.gcerror = mmu2d_set_master(&client->ctxt);
 	if (_gccommit.gcerror != GCERR_NONE)
