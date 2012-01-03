@@ -35,6 +35,9 @@
 #	define GC_PRINT(...)
 #endif
 
+#define GC_CMD_BUF_PAGES	20
+#define GC_CMD_BUF_SIZE		(PAGE_SIZE * GC_CMD_BUF_PAGES)
+
 struct cmdbuf {
 	struct gcpage page;
 
@@ -54,7 +57,7 @@ enum gcerror cmdbuf_init(void)
 {
 	enum gcerror gcerror;
 
-	gcerror = gc_alloc_pages(&cmdbuf.page, PAGE_SIZE);
+	gcerror = gc_alloc_pages(&cmdbuf.page, GC_CMD_BUF_SIZE);
 	if (gcerror != GCERR_NONE)
 		return GCERR_SETGRP(gcerror, GCERR_CMD_ALLOC);
 
@@ -64,7 +67,7 @@ enum gcerror cmdbuf_init(void)
 	cmdbuf.logical = cmdbuf.page.logical;
 	cmdbuf.physical = cmdbuf.page.physical;
 
-	cmdbuf.available = PAGE_SIZE;
+	cmdbuf.available = cmdbuf.page.size;
 	cmdbuf.data_size = 0;
 
 	GC_PRINT(KERN_INFO "%s(%d): Initialized command buffer.\n",
@@ -87,11 +90,20 @@ enum gcerror cmdbuf_map(struct mmu2dcontext *ctxt)
 	enum gcerror gcerror;
 	struct mmu2dphysmem mem;
 	struct mmu2darena *mapped;
+	pte_t physpages[GC_CMD_BUF_PAGES];
+	unsigned char *logical;
+	int i;
+
+	logical = (unsigned char *) cmdbuf.page.logical;
+	for (i = 0; i < GC_CMD_BUF_PAGES; i += 1) {
+		physpages[i] = page_to_phys(virt_to_page(logical));
+		logical += PAGE_SIZE;
+	}
 
 	mem.base = (u32) cmdbuf.page.logical;
 	mem.offset = 0;
-	mem.count = 1;
-	mem.pages = (pte_t *) &cmdbuf.page.physical;
+	mem.count = GC_CMD_BUF_PAGES;
+	mem.pages = physpages;
 	mem.pagesize = PAGE_SIZE;
 
 	gcerror = mmu2d_map(ctxt, &mem, &mapped);
@@ -152,10 +164,6 @@ int cmdbuf_flush(u32 *logical)
 		u32 base;
 		u32 count;
 
-#if ENABLE_POLLING
-		u32 retry;
-#endif
-
 		/* Append EVENT(Event, destination). */
 		logical[0]
 			= LS(AQEventRegAddrs, 1);
@@ -179,10 +187,6 @@ int cmdbuf_flush(u32 *logical)
 
 		/* Compute the data count. */
 		count = (cmdbuf.data_size + 7) >> 3;
-
-#if ENABLE_POLLING
-		int_data = 0;
-#endif
 
 		GC_PRINT("starting DMA at 0x%08X with count of %d\n",
 			base, count);
@@ -208,17 +212,9 @@ int cmdbuf_flush(u32 *logical)
 
 		/* Wait for the interrupt. */
 #if ENABLE_POLLING
-		retry = 0;
-		while (1) {
-			if (int_data != 0)
-				break;
-
-			msleep(500);
-			retry += 1;
-
-			if ((retry % 5) == 0)
-				gpu_status((char *) __func__, __LINE__, 0);
-		}
+		gc_wait_interrupt();
+		GC_PRINT(KERN_INFO "%s(%d): data = 0x%08X\n",
+			__func__, __LINE__, gc_get_interrupt_data());
 #else
 		wait_event_interruptible(gc_event, done == true);
 #endif

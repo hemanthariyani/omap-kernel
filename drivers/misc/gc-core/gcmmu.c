@@ -36,6 +36,10 @@
 #	define GC_DUMP_MMU 0
 #endif
 
+#ifndef GC_FLUSH_USER_PAGES
+#	define GC_FLUSH_USER_PAGES 0
+#endif
+
 #if GC_DUMP
 #	define GC_PRINT printk
 #else
@@ -415,6 +419,7 @@ static void release_physical_pages(struct mmu2darena *arena)
 	}
 }
 
+#if GC_FLUSH_USER_PAGES
 static void flush_user_buffer(struct mmu2darena *arena)
 {
 	u32 i;
@@ -466,6 +471,7 @@ static void flush_user_buffer(struct mmu2darena *arena)
 		gc_flush_pages(&gcpage);
 	}
 }
+#endif
 
 enum gcerror mmu2d_create_context(struct mmu2dcontext *ctxt)
 {
@@ -1163,7 +1169,9 @@ enum gcerror mmu2d_fixup(
 			offset = *table++;
 			arena = (struct mmu2darena *) data[offset];
 			data[offset] = arena->address;
+#if GC_FLUSH_USER_PAGES
 			flush_user_buffer(arena);
+#endif
 		}
 
 		/* Get the next fixup. */

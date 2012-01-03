@@ -18,10 +18,6 @@
 #include <linux/gccore.h>
 #include "gcmmu.h"
 
-#if ENABLE_POLLING
-extern volatile u32 int_data;
-#endif
-
 extern wait_queue_head_t gc_event;
 extern int done;
 

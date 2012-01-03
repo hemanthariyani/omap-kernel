@@ -36,8 +36,13 @@ struct gcpage {
 	unsigned int *logical;
 };
 
-enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size);
+enum gcerror gc_alloc_pages(struct gcpage *p, unsigned int size);
 void gc_free_pages(struct gcpage *p);
 void gc_flush_pages(struct gcpage *p);
+
+#if ENABLE_POLLING
+void gc_wait_interrupt(void);
+u32 gc_get_interrupt_data(void);
+#endif
 
 #endif

@@ -30,6 +30,10 @@
 #include "gcmmu.h"
 #include "gcreg.h"
 
+#if ENABLE_POLLING
+#include <linux/semaphore.h>
+#endif
+
 #ifndef GC_DUMP
 #	define GC_DUMP 0
 #endif
@@ -73,10 +77,6 @@ struct clientinfo {
 	int mmu_dirty;
 };
 
-#if ENABLE_POLLING
-volatile u32 int_data;
-#endif
-
 /*******************************************************************************
  * Register access.
  */
@@ -98,47 +98,47 @@ void gc_write_reg(unsigned int address, unsigned int data)
  * Page allocation routines.
  */
 
-enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
+enum gcerror gc_alloc_pages(struct gcpage *p, unsigned int size)
 {
 	enum gcerror gcerror;
 	void *logical;
 	int order, count;
 
-	gcpage->pages = NULL;
-	gcpage->logical = NULL;
-	gcpage->physical = ~0UL;
+	p->pages = NULL;
+	p->logical = NULL;
+	p->physical = ~0UL;
 
 	order = get_order(size);
 
-	gcpage->order = order;
-	gcpage->size = (1 << order) * PAGE_SIZE;
+	p->order = order;
+	p->size = (1 << order) * PAGE_SIZE;
 
 	GC_PRINT(KERN_ERR "%s(%d): requested size=%d\n",
 		__func__, __LINE__, size);
 
 	GC_PRINT(KERN_ERR "%s(%d): rounded up size=%d\n",
-		__func__, __LINE__, gcpage->size);
+		__func__, __LINE__, p->size);
 
 	GC_PRINT(KERN_ERR "%s(%d): order=%d\n",
 		__func__, __LINE__, order);
 
-	gcpage->pages = alloc_pages(GFP_KERNEL, order);
-	if (gcpage->pages == NULL) {
+	p->pages = alloc_pages(GFP_KERNEL, order);
+	if (p->pages == NULL) {
 		gcerror = GCERR_OOPM;
 		goto fail;
 	}
 
-	gcpage->physical = page_to_phys(gcpage->pages);
-	gcpage->logical = (unsigned int *) page_address(gcpage->pages);
+	p->physical = page_to_phys(p->pages);
+	p->logical = (unsigned int *) page_address(p->pages);
 
-	if (gcpage->logical == NULL) {
+	if (p->logical == NULL) {
 		gcerror = GCERR_PMMAP;
 		goto fail;
 	}
 
 	/* Reserve pages. */
-	logical = gcpage->logical;
-	count = gcpage->size / PAGE_SIZE;
+	logical = p->logical;
+	count = p->size / PAGE_SIZE;
 
 	while (count) {
 		SetPageReserved(virt_to_page(logical));
@@ -147,20 +147,49 @@ enum gcerror gc_alloc_pages(struct gcpage *gcpage, unsigned int size)
 		count  -= 1;
 	}
 
-	GC_PRINT(KERN_ERR "%s(%d): physical=0x%08X, size=%d\n",
+	GC_PRINT(KERN_ERR "%s(%d): (0x%08X) pages=0x%08X,"
+				" logical=0x%08X, physical=0x%08X, size=%d\n",
 				__func__, __LINE__,
-				(unsigned int) gcpage->physical, gcpage->size);
+				(unsigned int) p,
+				(unsigned int) p->pages,
+				(unsigned int) p->logical,
+				(unsigned int) p->physical,
+				p->size);
+
 	return GCERR_NONE;
 
 fail:
-	gc_free_pages(gcpage);
+	gc_free_pages(p);
 	return gcerror;
 }
 
 void gc_free_pages(struct gcpage *p)
 {
-	if (p->logical != NULL)
+	GC_PRINT(KERN_ERR "%s(%d): (0x%08X) pages=0x%08X,"
+				" logical=0x%08X, physical=0x%08X, size=%d\n",
+				__func__, __LINE__,
+				(unsigned int) p,
+				(unsigned int) p->pages,
+				(unsigned int) p->logical,
+				(unsigned int) p->physical,
+				p->size);
+
+	if (p->logical != NULL) {
+		void *logical;
+		int count;
+
+		logical = p->logical;
+		count = p->size / PAGE_SIZE;
+
+		while (count) {
+			ClearPageReserved(virt_to_page(logical));
+
+			logical = (unsigned char *) logical + PAGE_SIZE;
+			count  -= 1;
+		}
+
 		p->logical = NULL;
+	}
 
 	if (p->pages != NULL) {
 		__free_pages(p->pages, p->order);
@@ -174,12 +203,14 @@ void gc_free_pages(struct gcpage *p)
 
 void gc_flush_pages(struct gcpage *p)
 {
-	GC_PRINT(KERN_ERR "%s(%d): p->logical=0x%08X\n",
-		__func__, __LINE__, (unsigned int) p->logical);
-	GC_PRINT(KERN_ERR "%s(%d): p->physical=0x%08X\n",
-		__func__, __LINE__, p->physical);
-	GC_PRINT(KERN_ERR "%s(%d): p->size=%d\n",
-		__func__, __LINE__, p->size);
+	GC_PRINT(KERN_ERR "%s(%d): (0x%08X) pages=0x%08X,"
+				" logical=0x%08X, physical=0x%08X, size=%d\n",
+				__func__, __LINE__,
+				(unsigned int) p,
+				(unsigned int) p->pages,
+				(unsigned int) p->logical,
+				(unsigned int) p->physical,
+				p->size);
 
 	dmac_flush_range(p->logical, (unsigned char *) p->logical + p->size);
 	outer_flush_range(p->physical, p->physical + p->size);
@@ -188,6 +219,26 @@ void gc_flush_pages(struct gcpage *p)
 /*******************************************************************************
  * Interrupt handling.
  */
+
+#if ENABLE_POLLING
+static struct semaphore g_gccoreint;
+static u32 g_gccoredata;
+
+void gc_wait_interrupt(void)
+{
+	down(&g_gccoreint);
+}
+
+u32 gc_get_interrupt_data(void)
+{
+	u32 data;
+
+	data = g_gccoredata;
+	g_gccoredata = 0;
+
+	return data;
+}
+#endif
 
 static struct workqueue_struct *gcwq;
 DECLARE_WAIT_QUEUE_HEAD(gc_event);
@@ -221,7 +272,8 @@ static irqreturn_t gc_irq(int irq, void *p)
 #endif
 
 #if ENABLE_POLLING
-		int_data = data & 0x3FFFFFFF;
+		g_gccoredata = data & 0x3FFFFFFF;
+		up(&g_gccoreint);
 #else
 		/* TODO: we need to wait for an interrupt after enabling
 			 the mmu, but we don't want to send a signal to
@@ -629,6 +681,10 @@ static int __init gc_init(void)
 	g_reg_base = ioremap_nocache(DEVICE_REG_BASE, DEVICE_REG_SIZE);
 	if (!g_reg_base)
 		goto free_plat_reg;
+
+#if ENABLE_POLLING
+	sema_init(&g_gccoreint, 0);
+#endif
 
 	/* TODO: clean this up in release call, after a blowup */
 	/* create interrupt handler */
