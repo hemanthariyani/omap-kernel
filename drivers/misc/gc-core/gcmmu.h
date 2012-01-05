@@ -114,6 +114,9 @@ struct mmu2darena {
 	/* Client's virtual pointer. */
 	void *logical;
 
+	/* Size of the mapped buffer. */
+	unsigned int size;
+
 	/* Page descriptor array. */
 	struct page **pages;
 

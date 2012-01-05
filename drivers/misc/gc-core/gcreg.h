@@ -3039,6 +3039,14 @@ struct gcregsrcorigin {
 	unsigned int y:16;
 };
 
+static const struct gcregsrcorigin gcregsrcorigin_min = {
+	/* gcregSrcOriginRegAddrs:GCREG_SRC_ORIGIN_X */
+	0,
+
+	/* gcregSrcOriginRegAddrs:GCREG_SRC_ORIGIN_Y */
+	0
+};
+
 /*******************************************************************************
 ** State gcregSrcSize
 */
@@ -3075,6 +3083,14 @@ struct gcregsrcsize {
 
 	/* gcregSrcOriginRegAddrs:GCREG_SRC_SIZE_Y */
 	unsigned int height:16;
+};
+
+static const struct gcregsrcsize gcregsrcsize_max = {
+	/* gcregSrcOriginRegAddrs:GCREG_SRC_SIZE_X */
+	32767,
+
+	/* gcregSrcOriginRegAddrs:GCREG_SRC_SIZE_Y */
+	32767
 };
 
 /*******************************************************************************

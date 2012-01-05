@@ -866,6 +866,8 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt, struct mmu2dphysmem *mem,
 		? *mem->pages : *parray_alloc);
 #endif
 
+	vacant->size = mem->count * MMU_PAGE_SIZE - mem->offset;
+
 fail:
 	if (parray_alloc != NULL) {
 		kfree(parray_alloc);
@@ -1096,23 +1098,29 @@ int mmu2d_flush(void *logical, u32 address, u32 size)
 #endif
 }
 
-enum gcerror mmu2d_fixup(
-	struct gcfixup *fixup, unsigned int *data
-	)
+enum gcerror mmu2d_fixup(struct gcfixup *fixup, unsigned int *data)
 {
 	enum gcerror gcerror = GCERR_NONE;
-	static struct gcfixup _fixup;	/* FIXME/TODO */
+	static struct gcfixup _fixup;
 	int fixedsize, tablesize;
 	struct mmu2darena *arena;
-	unsigned int *table;
-	unsigned int offset;
+	struct gcfixupentry *table;
+	unsigned int dataoffset;
+	unsigned int surfoffset;
 	unsigned int i;
 
 	/* Get the fixed sized of the structure. */
 	fixedsize = offsetof(struct gcfixup, fixup);
 
+	for (i = 0; i < 100; i += 1) {
+		GC_PRINT(KERN_ERR "%s(%d): 0x%08X\n",
+			__func__, __LINE__, data[i]);
+	}
+
 	/* Process fixups. */
 	while (fixup != NULL) {
+		GC_PRINT(KERN_ERR "%s(%d): processing user fixup @ 0x%08X\n",
+			__func__, __LINE__, (unsigned int) fixup);
 
 		/* Get gcfixup structure up to the table. */
 		if (copy_from_user(&_fixup, fixup, fixedsize)) {
@@ -1121,7 +1129,10 @@ enum gcerror mmu2d_fixup(
 		}
 
 		/* Compute the size of the fixup table. */
-		tablesize = _fixup.count * sizeof(unsigned int);
+		tablesize = _fixup.count * sizeof(struct gcfixupentry);
+
+		GC_PRINT(KERN_ERR "%s(%d): fixup count = %d, table size = %d\n",
+			__func__, __LINE__, _fixup.count, tablesize);
 
 		/* Get the fixup table. */
 		if (copy_from_user(&_fixup.fixup, fixup->fixup, tablesize)) {
@@ -1134,12 +1145,38 @@ enum gcerror mmu2d_fixup(
 
 		/* Apply fixups. */
 		for (i = 0; i < fixup->count; i += 1) {
-			offset = *table++;
-			arena = (struct mmu2darena *) data[offset];
-			data[offset] = arena->address;
+			GC_PRINT("%s(%d): [%02d] buffer offset = 0x%08X, "
+				"surface offset = 0x%08X\n",
+				__func__, __LINE__, i,
+				table->dataoffset * 4,
+				table->surfoffset);
+
+			dataoffset = table->dataoffset;
+			arena = (struct mmu2darena *) data[dataoffset];
+
+			GC_PRINT(KERN_ERR "%s(%d): arena = 0x%08X\n",
+				__func__, __LINE__,  (unsigned int) arena);
+			GC_PRINT(KERN_ERR "%s(%d): arena phys = 0x%08X\n",
+				__func__, __LINE__, arena->address);
+			GC_PRINT(KERN_ERR "%s(%d): arena size = %d\n",
+				__func__, __LINE__, arena->size);
+
+			surfoffset = table->surfoffset;
+
+#if 0
+			if (surfoffset > arena->size) {
+				gcerror = GCERR_MMU_OFFSET;
+				goto exit;
+			}
+#endif
+
+			data[dataoffset] = arena->address + surfoffset;
+
 #if GC_FLUSH_USER_PAGES
 			flush_user_buffer(arena);
 #endif
+
+			table += 1;
 		}
 
 		/* Get the next fixup. */
