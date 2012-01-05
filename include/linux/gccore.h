@@ -145,6 +145,9 @@ enum gcerror {
 
 	GCERR_MMU_PHYS_ALLOC		/* Bad page within the buffer. */
 	= GCERR_GROUP(0x020E0),
+
+	GCERR_MMU_OFFSET		/* Bad buffer offset. */
+	= GCERR_GROUP(0x020F0),
 };
 
 /*******************************************************************************
@@ -169,7 +172,7 @@ struct gccommit {
 };
 
 /* Command buffer header. */
-#define GC_BUFFER_SIZE 4096
+#define GC_BUFFER_SIZE 81920
 struct gcbuffer {
 	struct gcfixup *fixuphead;	/* Address fixup list. */
 	struct gcfixup *fixuptail;
@@ -185,12 +188,20 @@ struct gcbuffer {
 					   buffer. */
 };
 
+/* Fixup entry. */
+struct gcfixupentry {
+	unsigned int dataoffset;	/* Offset into the commmand buffer
+					   where fixup is to be performed. */
+	unsigned int surfoffset;	/* Offset to be added to the base
+					   address of the surface. */
+};
+
 /* Address fixup array. */
 #define GC_FIXUP_MAX 1024
 struct gcfixup {
 	struct gcfixup *next;
 	unsigned int count;
-	unsigned int fixup[GC_FIXUP_MAX];
+	struct gcfixupentry fixup[GC_FIXUP_MAX];
 };
 
 /*******************************************************************************
