@@ -203,7 +203,7 @@ enum gcerror mmu2d_map(struct mmu2dcontext *ctxt,
 	struct mmu2dphysmem *mem, struct mmu2darena **mapped);
 enum gcerror mmu2d_unmap(struct mmu2dcontext *ctxt,
 	struct mmu2darena *mapped);
-int mmu2d_flush(u32 *logical, u32 address, u32 size);
+int mmu2d_flush(void *logical, u32 address, u32 size);
 enum gcerror mmu2d_fixup(struct gcfixup *fixup, unsigned int *data);
 void mmu2d_dump(struct mmu2dcontext *ctxt);
 

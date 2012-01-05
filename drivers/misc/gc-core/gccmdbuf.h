@@ -23,8 +23,8 @@ extern int done;
 
 enum gcerror cmdbuf_init(void);
 enum gcerror cmdbuf_map(struct mmu2dcontext *ctxt);
-enum gcerror cmdbuf_alloc(u32 size, u32 **logical, u32 *physical);
-int cmdbuf_flush(u32 *logical);
+enum gcerror cmdbuf_alloc(u32 size, void **logical, u32 *physical);
+int cmdbuf_flush(void *logical);
 void cmdbuf_dump(void);
 
 void gpu_id(void);

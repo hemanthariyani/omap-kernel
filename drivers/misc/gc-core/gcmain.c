@@ -259,8 +259,8 @@ static irqreturn_t gc_irq(int irq, void *p)
 	struct clientinfo *client = NULL;
 #endif
 
-	/* Read AQIntrAcknowledge register. */
-	data = gc_read_reg(AQ_INTR_ACKNOWLEDGE_Address);
+	/* Read gcregIntrAcknowledge register. */
+	data = gc_read_reg(GCREG_INTR_ACKNOWLEDGE_Address);
 
 	GC_PRINT(KERN_ERR "%s(%d): data=0x%08X\n", __func__, __LINE__, data);
 
@@ -371,6 +371,7 @@ int gc_commit(struct gccommit *gccommit)
 	unsigned int allocsize;
 	unsigned int *logical;
 	unsigned int address;
+	struct gcmopipesel *gcmopipesel;
 
 	/* Get gccommit input. */
 	if (copy_from_user(&_gccommit, gccommit, sizeof(struct gccommit))) {
@@ -384,21 +385,13 @@ int gc_commit(struct gccommit *gccommit)
 		goto exit;
 
 	/* Set 2D pipe. */
-	_gccommit.gcerror = cmdbuf_alloc(2 * sizeof(u32), &logical, &address);
+	_gccommit.gcerror = cmdbuf_alloc(sizeof(struct gcmopipesel),
+					(void **) &gcmopipesel, NULL);
 	if (_gccommit.gcerror != GCERR_NONE)
 		return _gccommit.gcerror;
 
-	/* Progfram master table address. */
-	logical[0]
-		= SETFIELDVAL(0, AQ_COMMAND_LOAD_STATE_COMMAND, OPCODE,
-			    LOAD_STATE)
-		| SETFIELD(0, AQ_COMMAND_LOAD_STATE_COMMAND, ADDRESS,
-			    AQPipeSelectRegAddrs)
-		| SETFIELD(0, AQ_COMMAND_LOAD_STATE_COMMAND, COUNT,
-			    1);
-
-	logical[1]
-		= AQ_PIPE_SELECT_PIPE_PIPE2D;
+	gcmopipesel->pipesel_ldst = gcmopipesel_pipesel_ldst;
+	gcmopipesel->pipesel.reg = gcregpipeselect_2D;
 
 	/* Set the client's master table. */
 	_gccommit.gcerror = mmu2d_set_master(&client->ctxt);
@@ -429,7 +422,8 @@ int gc_commit(struct gccommit *gccommit)
 
 		/* Reserve command buffer space. */
 		allocsize = mmuflushsize + buffersize + cmdflushsize;
-		_gccommit.gcerror = cmdbuf_alloc(allocsize, &logical, &address);
+		_gccommit.gcerror = cmdbuf_alloc(allocsize,
+						(void **) &logical, &address);
 		if (_gccommit.gcerror != GCERR_NONE)
 			goto exit;
 
@@ -715,16 +709,16 @@ static int __init gc_init(void)
 		goto free_reg_mapping;
 
 	/* gcvPOWER_ON */
-	clock = SETFIELD(0, AQ_HI_CLOCK_CONTROL, CLK2D_DIS, 0) |
-		SETFIELD(0, AQ_HI_CLOCK_CONTROL, FSCALE_VAL, 64) |
-		SETFIELD(0, AQ_HI_CLOCK_CONTROL, FSCALE_CMD_LOAD, 1);
+	clock = SETFIELD(0, GCREG_HI_CLOCK_CONTROL, CLK2D_DIS, 0) |
+		SETFIELD(0, GCREG_HI_CLOCK_CONTROL, FSCALE_VAL, 64) |
+		SETFIELD(0, GCREG_HI_CLOCK_CONTROL, FSCALE_CMD_LOAD, 1);
 
-	gc_write_reg(AQ_HI_CLOCK_CONTROL_Address, clock);
+	gc_write_reg(GCREG_HI_CLOCK_CONTROL_Address, clock);
 
 	/* Done loading the frequency scaler. */
-	clock = SETFIELD(clock, AQ_HI_CLOCK_CONTROL, FSCALE_CMD_LOAD, 0);
+	clock = SETFIELD(clock, GCREG_HI_CLOCK_CONTROL, FSCALE_CMD_LOAD, 0);
 
-	gc_write_reg(AQ_HI_CLOCK_CONTROL_Address, clock);
+	gc_write_reg(GCREG_HI_CLOCK_CONTROL_Address, clock);
 
 #if GC_DUMP
 	/* Print GPU ID. */

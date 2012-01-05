@@ -479,10 +479,8 @@ enum gcerror mmu2d_create_context(struct mmu2dcontext *ctxt)
 
 #if MMU_ENABLE
 	int i;
-	u32 *buffer;
-	u32 physical;
-	u32 cmdflushsize;
-	u32 size;
+	struct gcmommuinit *gcmommuinit;
+	u32 cmdflushsize, size;
 #endif
 
 	struct mmu2dprivate *mmu = get_mmu();
@@ -556,23 +554,19 @@ enum gcerror mmu2d_create_context(struct mmu2dcontext *ctxt)
 		cmdflushsize = cmdbuf_flush(NULL);
 
 		/* Allocate command buffer space. */
-		size = 4 * sizeof(u32) + cmdflushsize;
-		gcerror = cmdbuf_alloc(size, &buffer, &physical);
+		size = sizeof(struct gcmommuinit) + cmdflushsize;
+		gcerror = cmdbuf_alloc(size, (void **) &gcmommuinit, NULL);
 		if (gcerror != GCERR_NONE) {
 			gcerror = GCERR_SETGRP(gcerror, GCERR_MMU_INIT);
 			goto fail;
 		}
 
-		/* Once the safe address is programmed, it cannot be changed. */
-		*buffer++ = LS(gcregMMUSafeAddressRegAddrs, 1);
-		*buffer++ = mmu->safezone.physical;
-
-		/* Progfram master table address. */
-		*buffer++ = LS(gcregMMUConfigurationRegAddrs, 1);
-		*buffer++ = ctxt->physical;
+		gcmommuinit->safe_ldst = gcmommuinit_safe_ldst;
+		gcmommuinit->safe = mmu->safezone.physical;
+		gcmommuinit->mtlb = ctxt->physical;
 
 		/* Execute the current command buffer. */
-		cmdbuf_flush(buffer);
+		cmdbuf_flush(gcmommuinit + 1);
 
 		/*
 		 * Enable MMU. For security reasons, once it is enabled,
@@ -652,8 +646,7 @@ enum gcerror mmu2d_set_master(struct mmu2dcontext *ctxt)
 {
 #if MMU_ENABLE
 	enum gcerror gcerror;
-	u32 *buffer;
-	u32 physical;
+	struct gcmommumaster *gcmommumaster;
 #endif
 
 	if ((ctxt == NULL) || (ctxt->mmu == NULL))
@@ -661,21 +654,14 @@ enum gcerror mmu2d_set_master(struct mmu2dcontext *ctxt)
 
 #if MMU_ENABLE
 	/* Allocate command buffer space. */
-	gcerror = cmdbuf_alloc(2 * sizeof(u32), &buffer, &physical);
+	gcerror = cmdbuf_alloc(sizeof(struct gcmommumaster),
+				(void **) &gcmommumaster, NULL);
 	if (gcerror != GCERR_NONE)
 		return GCERR_SETGRP(gcerror, GCERR_MMU_MTLB_SET);
 
 	/* Progfram master table address. */
-	buffer[0]
-		= SETFIELDVAL(0, AQ_COMMAND_LOAD_STATE_COMMAND, OPCODE,
-			    LOAD_STATE)
-		| SETFIELD(0, AQ_COMMAND_LOAD_STATE_COMMAND, ADDRESS,
-			    gcregMMUConfigurationRegAddrs)
-		| SETFIELD(0, AQ_COMMAND_LOAD_STATE_COMMAND, COUNT,
-			    1);
-
-	buffer[1]
-		= ctxt->physical;
+	gcmommumaster->master_ldst = gcmommumaster_master_ldst;
+	gcmommumaster->master = ctxt->physical;
 #endif
 
 	return GCERR_NONE;
@@ -1053,72 +1039,54 @@ fail:
 	return gcerror;
 }
 
-int mmu2d_flush(u32 *logical, u32 address, u32 size)
+int mmu2d_flush(void *logical, u32 address, u32 size)
 {
 #if MMU_ENABLE
-	static const int flushSize = 16 * sizeof(u32);
+	static const int flushSize = sizeof(struct gcmommuflush);
+	struct gcmommuflush *gcmommuflush;
 	u32 count;
 
 	if (logical != NULL) {
 		/* Compute the buffer count. */
 		count = (size - flushSize + 7) >> 3;
 
+		gcmommuflush = (struct gcmommuflush *) logical;
+
 		/* Flush 2D PE cache. */
-		logical[0] = LS(AQFlushRegAddrs, 1);
-		logical[1] = SETFIELDVAL(0, AQ_FLUSH, PE2D_CACHE, ENABLE);
+		gcmommuflush->peflush.flush_ldst = gcmoflush_flush_ldst;
+		gcmommuflush->peflush.flush.reg = gcregflush_pe2D;
 
 		/* Arm the FE-PE semaphore. */
-		logical[2] = LS(AQSemaphoreRegAddrs, 1);
-
-		logical[3]
-		= SETFIELDVAL(0, AQ_SEMAPHORE, SOURCE, FRONT_END)
-		| SETFIELDVAL(0, AQ_SEMAPHORE, DESTINATION, PIXEL_ENGINE);
+		gcmommuflush->peflushsema.sema_ldst = gcmosema_sema_ldst;
+		gcmommuflush->peflushsema.sema.reg  = gcregsema_fe_pe;
 
 		/* Stall FE until PE is done flushing. */
-		logical[4]
-		= SETFIELDVAL(0, STALL_COMMAND, OPCODE, STALL);
-
-		logical[5]
-		= SETFIELDVAL(0, AQ_SEMAPHORE, SOURCE, FRONT_END)
-		| SETFIELDVAL(0, AQ_SEMAPHORE, DESTINATION, PIXEL_ENGINE);
+		gcmommuflush->peflushstall.cmd.fld = gcfldstall;
+		gcmommuflush->peflushstall.arg.fld = gcfldstall_fe_pe;
 
 		/* LINK to the next slot to flush FE FIFO. */
-		logical[6]
-		= SETFIELDVAL(0, AQ_COMMAND_LINK_COMMAND, OPCODE, LINK)
-		| SETFIELD(0, AQ_COMMAND_LINK_COMMAND, PREFETCH, 4);
-
-		logical[7] = address + 8 * sizeof(u32);
+		gcmommuflush->feflush.cmd.fld = gcfldlink4;
+		gcmommuflush->feflush.address
+			= address
+			+ offsetof(struct gcmommuflush, mmuflush_ldst);
 
 		/* Flush MMU cache. */
-		logical[8] = LS(gcregMMUConfigurationRegAddrs, 1);
-
-		logical[9]
-		= SETFIELDVAL(~0U, GCREG_MMU_CONFIGURATION, FLUSH, FLUSH)
-		& SETFIELDVAL(~0U, GCREG_MMU_CONFIGURATION, MASK_FLUSH, ENABLED)
-		;
+		gcmommuflush->mmuflush_ldst = gcmommuflush_mmuflush_ldst;
+		gcmommuflush->mmuflush.reg = gcregmmu_flush;
 
 		/* Arm the FE-PE semaphore. */
-		logical[10] = LS(AQSemaphoreRegAddrs, 1);
-
-		logical[11]
-		= SETFIELDVAL(0, AQ_SEMAPHORE, SOURCE, FRONT_END)
-		| SETFIELDVAL(0, AQ_SEMAPHORE, DESTINATION, PIXEL_ENGINE);
+		gcmommuflush->mmuflushsema.sema_ldst = gcmosema_sema_ldst;
+		gcmommuflush->mmuflushsema.sema.reg  = gcregsema_fe_pe;
 
 		/* Stall FE until PE is done flushing. */
-		logical[12]
-		= SETFIELDVAL(0, STALL_COMMAND, OPCODE, STALL);
-
-		logical[13]
-		= SETFIELDVAL(0, AQ_SEMAPHORE, SOURCE, FRONT_END)
-		| SETFIELDVAL(0, AQ_SEMAPHORE, DESTINATION, PIXEL_ENGINE);
+		gcmommuflush->mmuflushstall.cmd.fld = gcfldstall;
+		gcmommuflush->mmuflushstall.arg.fld = gcfldstall_fe_pe;
 
 		/* LINK to the next slot to flush FE FIFO. */
-		logical[14]
-		= SETFIELDVAL(0, AQ_COMMAND_LINK_COMMAND, OPCODE, LINK)
-		| SETFIELD(0, AQ_COMMAND_LINK_COMMAND, PREFETCH, count);
-
-		logical[15]
-		= address + flushSize;
+		gcmommuflush->link.cmd.fld.opcode
+			= GCREG_COMMAND_LINK_COMMAND_OPCODE_LINK;
+		gcmommuflush->link.cmd.fld.count = count;
+		gcmommuflush->link.address = address + flushSize;
 	}
 
 	/* Return the size in bytes required for the flush. */

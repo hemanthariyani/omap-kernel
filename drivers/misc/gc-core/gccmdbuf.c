@@ -23,7 +23,7 @@
 #include "gcmain.h"
 #include "gccmdbuf.h"
 
-#define GC_ENABLE_GPU_COUNTERS	1
+#define GC_ENABLE_GPU_COUNTERS	0
 
 #ifndef GC_DUMP
 #	define GC_DUMP 0
@@ -138,15 +138,18 @@ enum gcerror cmdbuf_map(struct mmu2dcontext *ctxt)
 	return GCERR_NONE;
 }
 
-enum gcerror cmdbuf_alloc(u32 size, u32 **logical, u32 *physical)
+enum gcerror cmdbuf_alloc(u32 size, void **logical, u32 *physical)
 {
 	if ((cmdbuf.logical == NULL) || (size > cmdbuf.available))
 		return GCERR_CMD_ALLOC;
 
 	size = (size + 3) & ~3;
 
-	*logical  = cmdbuf.logical;
-	*physical = cmdbuf.physical;
+	if (logical != NULL)
+		*logical = cmdbuf.logical;
+
+	if (physical != NULL)
+		*physical = cmdbuf.physical;
 
 	cmdbuf.logical   += (size >> 2);
 	cmdbuf.physical  += size;
@@ -156,25 +159,27 @@ enum gcerror cmdbuf_alloc(u32 size, u32 **logical, u32 *physical)
 	return GCERR_NONE;
 }
 
-int cmdbuf_flush(u32 *logical)
+int cmdbuf_flush(void *logical)
 {
-	static const int flushSize = 4 * sizeof(u32);
+	static const int flushSize
+		= sizeof(struct gcmosignal) + sizeof(struct gccmdend);
 
 	if (logical != NULL) {
-		u32 base;
-		u32 count;
+		struct gcmosignal *gcmosignal;
+		struct gccmdend *gccmdend;
+		u32 base, count;
 
-		/* Append EVENT(Event, destination). */
-		logical[0]
-			= LS(AQEventRegAddrs, 1);
+		/* Configure the signal. */
+		gcmosignal = (struct gcmosignal *) logical;
+		gcmosignal->signal_ldst = gcmosignal_signal_ldst;
+		gcmosignal->signal.raw = 0;
+		gcmosignal->signal.reg.id = 16;
+		gcmosignal->signal.reg.pe = GCREG_EVENT_PE_SRC_ENABLE;
+		gcmosignal->signal.reg.fe = GCREG_EVENT_FE_SRC_DISABLE;
 
-		logical[1]
-			= SETFIELDVAL(0, AQ_EVENT, PE_SRC, ENABLE)
-			| SETFIELD(0, AQ_EVENT, EVENT_ID, 16);
-
-		/* Stop FE. */
-		logical[2]
-			= SETFIELDVAL(0, AQ_COMMAND_END_COMMAND, OPCODE, END);
+		/* Configure the end command. */
+		gccmdend = (struct gccmdend *) (gcmosignal + 1);
+		gccmdend->cmd.fld = gcfldend;
 
 #if GC_DUMP
 		/* Dump command buffer. */
@@ -199,20 +204,21 @@ int cmdbuf_flush(u32 *logical)
 #endif
 
 		/* Enable all events. */
-		gc_write_reg(AQ_INTR_ENBL_Address, ~0U);
+		gc_write_reg(GCREG_INTR_ENBL_Address, ~0U);
 
 		/* Write address register. */
-		gc_write_reg(AQ_CMD_BUFFER_ADDR_Address, base);
+		gc_write_reg(GCREG_CMD_BUFFER_ADDR_Address, base);
 
 		/* Write control register. */
-		gc_write_reg(AQ_CMD_BUFFER_CTRL_Address,
-			SETFIELDVAL(0, AQ_CMD_BUFFER_CTRL, ENABLE, ENABLE) |
-			SETFIELD(0, AQ_CMD_BUFFER_CTRL, PREFETCH, count)
+		gc_write_reg(GCREG_CMD_BUFFER_CTRL_Address,
+			SETFIELDVAL(0, GCREG_CMD_BUFFER_CTRL, ENABLE, ENABLE) |
+			SETFIELD(0, GCREG_CMD_BUFFER_CTRL, PREFETCH, count)
 			);
 
 		/* Wait for the interrupt. */
 #if ENABLE_POLLING
 		gc_wait_interrupt();
+
 		GC_PRINT(KERN_INFO "%s(%d): data = 0x%08X\n",
 			__func__, __LINE__, gc_get_interrupt_data());
 #else
@@ -277,23 +283,23 @@ void gpu_status(char *function, int line, u32 acknowledge)
 	GC_PRINT(KERN_INFO "%s(%d): Current GPU status.\n",
 		function, line);
 
-	idle = gc_read_reg(AQ_HI_IDLE_Address);
+	idle = gc_read_reg(GCREG_HI_IDLE_Address);
 	GC_PRINT(KERN_INFO "%s(%d):   idle = 0x%08X\n",
 		function, line, idle);
 
-	dma_state = gc_read_reg(AQFE_DEBUG_STATE_Address);
+	dma_state = gc_read_reg(GCREG_FE_DEBUG_STATE_Address);
 	GC_PRINT(KERN_INFO "%s(%d):   DMA state = 0x%08X\n",
 		function, line, dma_state);
 
-	dma_addr = gc_read_reg(AQFE_DEBUG_CUR_CMD_ADR_Address);
+	dma_addr = gc_read_reg(GCREG_FE_DEBUG_CUR_CMD_ADR_Address);
 	GC_PRINT(KERN_INFO "%s(%d):   DMA address = 0x%08X\n",
 		function, line, dma_addr);
 
-	dma_low_data = gc_read_reg(AQFE_DEBUG_CMD_LOW_REG_Address);
+	dma_low_data = gc_read_reg(GCREG_FE_DEBUG_CMD_LOW_REG_Address);
 	GC_PRINT(KERN_INFO "%s(%d):   DMA low data = 0x%08X\n",
 		function, line, dma_low_data);
 
-	dma_high_data = gc_read_reg(AQFE_DEBUG_CMD_HI_REG_Address);
+	dma_high_data = gc_read_reg(GCREG_FE_DEBUG_CMD_HI_REG_Address);
 	GC_PRINT(KERN_INFO "%s(%d):   DMA high data = 0x%08X\n",
 		function, line, dma_high_data);
 
