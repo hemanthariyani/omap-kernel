@@ -32,10 +32,6 @@
 #	define GC_DUMP 0
 #endif
 
-#ifndef GC_DUMP_MMU
-#	define GC_DUMP_MMU 0
-#endif
-
 #ifndef GC_FLUSH_USER_PAGES
 #	define GC_FLUSH_USER_PAGES 0
 #endif
@@ -83,7 +79,6 @@ static inline struct mmu2dprivate *get_mmu(void)
 	return &_mmu;
 }
 
-#if GC_DUMP_MMU
 static u32 get_mtlb_present(u32 entry)
 {
 	return entry & MMU_MTLB_PRESENT_MASK;
@@ -174,7 +169,6 @@ static void mmu2d_dump_table(struct mm2dtable *desc, struct gcpage *table)
 			skipped);
 	}
 }
-#endif
 
 /*
  * Arena record management.
@@ -1112,11 +1106,6 @@ enum gcerror mmu2d_fixup(struct gcfixup *fixup, unsigned int *data)
 	/* Get the fixed sized of the structure. */
 	fixedsize = offsetof(struct gcfixup, fixup);
 
-	for (i = 0; i < 100; i += 1) {
-		GC_PRINT(KERN_ERR "%s(%d): 0x%08X\n",
-			__func__, __LINE__, data[i]);
-	}
-
 	/* Process fixups. */
 	while (fixup != NULL) {
 		GC_PRINT(KERN_ERR "%s(%d): processing user fixup @ 0x%08X\n",
@@ -1172,6 +1161,9 @@ enum gcerror mmu2d_fixup(struct gcfixup *fixup, unsigned int *data)
 
 			data[dataoffset] = arena->address + surfoffset;
 
+			GC_PRINT(KERN_ERR "%s(%d): surface address = 0x%08X\n",
+				__func__, __LINE__, data[dataoffset]);
+
 #if GC_FLUSH_USER_PAGES
 			flush_user_buffer(arena);
 #endif
@@ -1189,7 +1181,6 @@ exit:
 
 void mmu2d_dump(struct mmu2dcontext *ctxt)
 {
-#if GC_DUMP_MMU
 	static struct mm2dtable mtlb_desc = {
 		"Master",
 		MMU_MTLB_ENTRY_NUM,
@@ -1258,6 +1249,4 @@ void mmu2d_dump(struct mmu2dcontext *ctxt)
 	for (i = 0; i < MMU_MTLB_ENTRY_NUM; i += 1)
 		if (ctxt->slave[i] != NULL)
 			mmu2d_dump_table(&stlb_desc, &ctxt->slave[i]->pages);
-
-#endif
 }

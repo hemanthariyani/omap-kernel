@@ -30,10 +30,6 @@
 #include "gcmmu.h"
 #include "gcreg.h"
 
-#if ENABLE_POLLING
-#include <linux/semaphore.h>
-#endif
-
 #ifndef GC_DUMP
 #	define GC_DUMP 0
 #endif
@@ -43,6 +39,8 @@
 #else
 #	define GC_PRINT(...)
 #endif
+
+#define GC_DETECT_TIMEOUT 0
 
 #define GC_DEVICE "gc-core"
 
@@ -221,12 +219,52 @@ void gc_flush_pages(struct gcpage *p)
  */
 
 #if ENABLE_POLLING
-static struct semaphore g_gccoreint;
+struct completion g_gccoreint;
 static u32 g_gccoredata;
 
 void gc_wait_interrupt(void)
 {
-	down(&g_gccoreint);
+	might_sleep();
+
+	spin_lock_irq(&g_gccoreint.wait.lock);
+
+	if (g_gccoreint.done) {
+		g_gccoreint.done = 0;
+	} else {
+#if GC_DETECT_TIMEOUT
+		int timeout = 10 * HZ;
+#else
+		int timeout = MAX_SCHEDULE_TIMEOUT;
+#endif
+
+		DECLARE_WAITQUEUE(wait, current);
+		wait.flags |= WQ_FLAG_EXCLUSIVE;
+		__add_wait_queue_tail(&g_gccoreint.wait, &wait);
+
+		while (1) {
+			if (signal_pending(current)) {
+				/* Interrupt received. */
+				break;
+			}
+
+			__set_current_state(TASK_INTERRUPTIBLE);
+			spin_unlock_irq(&g_gccoreint.wait.lock);
+			timeout = schedule_timeout(timeout);
+			spin_lock_irq(&g_gccoreint.wait.lock);
+
+			if (g_gccoreint.done) {
+				g_gccoreint.done = 0;
+				break;
+			}
+
+			gpu_status((char *) __func__, __LINE__, 0);
+			timeout = 10 * HZ;
+		}
+
+		__remove_wait_queue(&g_gccoreint.wait, &wait);
+	}
+
+	spin_unlock_irq(&g_gccoreint.wait.lock);
 }
 
 u32 gc_get_interrupt_data(void)
@@ -273,7 +311,7 @@ static irqreturn_t gc_irq(int irq, void *p)
 
 #if ENABLE_POLLING
 		g_gccoredata = data & 0x3FFFFFFF;
-		up(&g_gccoreint);
+		complete(&g_gccoreint);
 #else
 		/* TODO: we need to wait for an interrupt after enabling
 			 the mmu, but we don't want to send a signal to
@@ -384,6 +422,10 @@ int gc_commit(struct gccommit *gccommit)
 	if (_gccommit.gcerror != GCERR_NONE)
 		goto exit;
 
+#if GC_DUMP_MMU
+	mmu2d_dump(&client->ctxt);
+#endif
+
 	/* Set 2D pipe. */
 	_gccommit.gcerror = cmdbuf_alloc(sizeof(struct gcmopipesel),
 					(void **) &gcmopipesel, NULL);
@@ -460,6 +502,10 @@ int gc_commit(struct gccommit *gccommit)
 		/* Get the next buffer. */
 		buffer = buffer->next;
 	}
+
+#if GC_DUMP_MMU
+	mmu2d_dump(&client->ctxt);
+#endif
 
 exit:
 	if (copy_to_user(gccommit, &_gccommit, sizeof(struct gccommit))) {
@@ -694,7 +740,7 @@ static int __init gc_init(void)
 		goto free_plat_reg;
 
 #if ENABLE_POLLING
-	sema_init(&g_gccoreint, 0);
+	init_completion(&g_gccoreint);
 #endif
 
 	/* TODO: clean this up in release call, after a blowup */
