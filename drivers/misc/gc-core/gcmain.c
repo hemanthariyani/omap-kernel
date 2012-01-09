@@ -422,10 +422,6 @@ int gc_commit(struct gccommit *gccommit)
 	if (_gccommit.gcerror != GCERR_NONE)
 		goto exit;
 
-#if GC_DUMP_MMU
-	mmu2d_dump(&client->ctxt);
-#endif
-
 	/* Set 2D pipe. */
 	_gccommit.gcerror = cmdbuf_alloc(sizeof(struct gcmopipesel),
 					(void **) &gcmopipesel, NULL);
@@ -503,10 +499,6 @@ int gc_commit(struct gccommit *gccommit)
 		buffer = buffer->next;
 	}
 
-#if GC_DUMP_MMU
-	mmu2d_dump(&client->ctxt);
-#endif
-
 exit:
 	if (copy_to_user(gccommit, &_gccommit, sizeof(struct gccommit))) {
 		GC_PRINT(KERN_ERR "%s(%d): transfer failed.\n",
@@ -554,6 +546,9 @@ int gc_map(struct gcmap *gcmap)
 	_gcmap.gcerror = mmu2d_map(&client->ctxt, &mem, &mapped);
 	if (_gcmap.gcerror != GCERR_NONE)
 		goto exit;
+
+	/* Invalidate the MMU. */
+	client->mmu_dirty = true;
 
 	_gcmap.handle = (unsigned int) mapped;
 
@@ -609,6 +604,9 @@ int gc_unmap(struct gcmap *gcmap)
 					(struct mmu2darena *) _gcmap.handle);
 	if (_gcmap.gcerror != GCERR_NONE)
 		goto exit;
+
+	/* Invalidate the MMU. */
+	client->mmu_dirty = true;
 
 	/* Invalidate the handle. */
 	_gcmap.handle = ~0U;

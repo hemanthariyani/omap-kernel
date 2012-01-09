@@ -225,10 +225,6 @@ int cmdbuf_flush(void *logical)
 		wait_event_interruptible(gc_event, done == true);
 #endif
 
-#if GC_DUMP
-		gpu_status((char *) __func__, __LINE__, 0);
-#endif
-
 		/* Reset the buffer. */
 		cmdbuf.logical  = cmdbuf.page.logical;
 		cmdbuf.physical = base;
