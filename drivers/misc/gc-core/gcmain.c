@@ -24,6 +24,7 @@
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/dma-mapping.h>
+#include <plat/cpu.h>
 
 #include "gcmain.h"
 #include "gccmdbuf.h"
@@ -688,90 +689,93 @@ static int __init gc_init(void)
 	GC_PRINT(KERN_ERR "%s(%d): ****** %s %s ******\n",
 			 __func__, __LINE__, __DATE__, __TIME__);
 
-	bb2d_clk = clk_get(NULL, "bb2d_fck");
-	if (IS_ERR(bb2d_clk)) {
-		GC_PRINT(KERN_ERR "%s(%d): cannot find bb2d_fck.\n",
+	if (cpu_is_omap447x()) {
+		bb2d_clk = clk_get(NULL, "bb2d_fck");
+		if (IS_ERR(bb2d_clk)) {
+			GC_PRINT(KERN_ERR "%s(%d): cannot find bb2d_fck.\n",
+				 __func__, __LINE__);
+			return -EINVAL;
+		}
+
+		rate = clk_get_rate(bb2d_clk);
+		GC_PRINT(KERN_ERR
+			"%s(%d): BB2D clock is %dMHz\n",
+			__func__, __LINE__, (rate / 1000000));
+
+		ret = clk_enable(bb2d_clk);
+		if (ret < 0) {
+			GC_PRINT(KERN_ERR "%s(%d):failed to enable bb2d_fck.\n",
 			 __func__, __LINE__);
-		return -EINVAL;
-	}
+			return -EINVAL;
+		}
 
-	rate = clk_get_rate(bb2d_clk);
-	GC_PRINT(KERN_ERR
-		"%s(%d): BB2D clock is %dMHz\n",
-		__func__, __LINE__, (rate / 1000000));
+		ret = alloc_chrdev_region(&dev, GC_MINOR, GC_COUNT, GC_DEVICE);
+		if (ret != 0)
+			return ret;
 
-	ret = clk_enable(bb2d_clk);
-	if (ret < 0) {
-		GC_PRINT(KERN_ERR "%s(%d): failed to enable bb2d_fck.\n",
-			 __func__, __LINE__);
-		return -EINVAL;
-	}
+		cdev_init(&cd, &ops);
+		cd.owner = THIS_MODULE;
+		ret = cdev_add(&cd, dev, 1);
+		if (ret)
+			goto free_chrdev_region;
 
-	ret = alloc_chrdev_region(&dev, GC_MINOR, GC_COUNT, GC_DEVICE);
-	if (ret != 0)
-		return ret;
+		class = class_create(THIS_MODULE, GC_DEVICE);
+		if (IS_ERR(class)) {
+			ret = PTR_ERR(class);
+			goto free_cdev;
+		}
 
-	cdev_init(&cd, &ops);
-	cd.owner = THIS_MODULE;
-	ret = cdev_add(&cd, dev, 1);
-	if (ret)
-		goto free_chrdev_region;
+		device = device_create(class, NULL, dev, NULL, GC_DEVICE);
+		if (IS_ERR(device)) {
+			ret = PTR_ERR(device);
+			goto free_class;
+		}
 
-	class = class_create(THIS_MODULE, GC_DEVICE);
-	if (IS_ERR(class)) {
-		ret = PTR_ERR(class);
-		goto free_cdev;
-	}
+		ret = platform_driver_register(&pd);
+		if (ret)
+			goto free_device;
 
-	device = device_create(class, NULL, dev, NULL, GC_DEVICE);
-	if (IS_ERR(device)) {
-		ret = PTR_ERR(device);
-		goto free_class;
-	}
-
-	ret = platform_driver_register(&pd);
-	if (ret)
-		goto free_device;
-
-	g_reg_base = ioremap_nocache(DEVICE_REG_BASE, DEVICE_REG_SIZE);
-	if (!g_reg_base)
-		goto free_plat_reg;
+		g_reg_base = ioremap_nocache(DEVICE_REG_BASE, DEVICE_REG_SIZE);
+		if (!g_reg_base)
+			goto free_plat_reg;
 
 #if ENABLE_POLLING
-	init_completion(&g_gccoreint);
+		init_completion(&g_gccoreint);
 #endif
 
-	/* TODO: clean this up in release call, after a blowup */
-	/* create interrupt handler */
-	ret = request_irq(DEVICE_INT, gc_irq, IRQF_SHARED, "gc-core",
-			&gcdevice);
-	if (ret)
-		goto free_plat_reg;
+		/* TODO: clean this up in release call, after a blowup */
+		/* create interrupt handler */
+		ret = request_irq(DEVICE_INT, gc_irq, IRQF_SHARED, "gc-core",
+				&gcdevice);
+		if (ret)
+			goto free_plat_reg;
 
-	gcwq = create_workqueue("gcwq");
-	if (!gcwq)
-		goto free_reg_mapping;
+		gcwq = create_workqueue("gcwq");
+		if (!gcwq)
+			goto free_reg_mapping;
 
-	/* gcvPOWER_ON */
-	clock = SETFIELD(0, GCREG_HI_CLOCK_CONTROL, CLK2D_DIS, 0) |
-		SETFIELD(0, GCREG_HI_CLOCK_CONTROL, FSCALE_VAL, 64) |
-		SETFIELD(0, GCREG_HI_CLOCK_CONTROL, FSCALE_CMD_LOAD, 1);
+		/* gcvPOWER_ON */
+		clock = SETFIELD(0, GCREG_HI_CLOCK_CONTROL, CLK2D_DIS, 0) |
+			SETFIELD(0, GCREG_HI_CLOCK_CONTROL, FSCALE_VAL, 64) |
+			SETFIELD(0, GCREG_HI_CLOCK_CONTROL, FSCALE_CMD_LOAD, 1);
 
-	gc_write_reg(GCREG_HI_CLOCK_CONTROL_Address, clock);
+		gc_write_reg(GCREG_HI_CLOCK_CONTROL_Address, clock);
 
-	/* Done loading the frequency scaler. */
-	clock = SETFIELD(clock, GCREG_HI_CLOCK_CONTROL, FSCALE_CMD_LOAD, 0);
+		/* Done loading the frequency scaler. */
+		clock = SETFIELD(clock, GCREG_HI_CLOCK_CONTROL,
+						FSCALE_CMD_LOAD, 0);
 
-	gc_write_reg(GCREG_HI_CLOCK_CONTROL_Address, clock);
+		gc_write_reg(GCREG_HI_CLOCK_CONTROL_Address, clock);
 
 #if GC_DUMP
-	/* Print GPU ID. */
-	gpu_id();
+		/* Print GPU ID. */
+		gpu_id();
 #endif
 
-	/* Initialize the command buffer. */
-	if (cmdbuf_init() != GCERR_NONE)
-		goto free_workq;
+		/* Initialize the command buffer. */
+		if (cmdbuf_init() != GCERR_NONE)
+			goto free_workq;
+	}
 
 	/* no errors, so exit */
 	goto exit;
